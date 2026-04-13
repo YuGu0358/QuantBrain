@@ -1907,7 +1907,7 @@ function dashboardHtml() {
 <html>
 <head>
 <meta charset="utf-8">
-<meta name="dashboard-token" content="${process.env.DASHBOARD_TOKEN ?? ''}">
+<meta name="dashboard-token" content="${process.env.ADMIN_TOKEN ?? process.env.DASHBOARD_TOKEN ?? ''}">
 <title>QuantBrain Dashboard v3</title>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
