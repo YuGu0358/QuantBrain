@@ -1,0 +1,13 @@
+openai
+anthropic
+faiss-cpu
+sqlalchemy
+pydantic
+tenacity
+pandas
+numpy
+scipy
+cvxpy
+pyyaml
+pytest
+pyarrow

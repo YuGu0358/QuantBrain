@@ -1,0 +1,94 @@
+{
+  "mode": "evaluate",
+  "objective": "robust fundamental quality with low crowding",
+  "generatedAt": "2026-04-10T13:09:13.471Z",
+  "rounds": 1,
+  "topCandidates": [
+    {
+      "id": "income_asset_scale_mnswz3dh",
+      "family": "fundamental-efficiency",
+      "expression": "ts_rank(operating_income / assets, 252)",
+      "alphaId": "78KWVrb1",
+      "totalScore": 0.738,
+      "scorecard": {
+        "strength": 0.3967,
+        "consistency": 0.8838,
+        "efficiency": 0.891,
+        "diversity": 1,
+        "total": 0.738
+      },
+      "metrics": {
+        "isSharpe": 0.92,
+        "isFitness": 0.5,
+        "turnover": 0.0488,
+        "returns": 0.0365,
+        "drawdown": 0.0545,
+        "trainSharpe": 1.07,
+        "trainFitness": 0.63,
+        "testSharpe": 0.29,
+        "testFitness": 0.09
+      }
+    },
+    {
+      "id": "income_price_scale_mnswz3dh",
+      "family": "fundamental-quality",
+      "expression": "ts_rank(operating_income / close, 252)",
+      "alphaId": "wpJqVEpl",
+      "totalScore": 0.6909,
+      "scorecard": {
+        "strength": 0.7675,
+        "consistency": 0.1987,
+        "efficiency": 0.8628,
+        "diversity": 1,
+        "total": 0.6909
+      },
+      "metrics": {
+        "isSharpe": 1.51,
+        "isFitness": 1.17,
+        "turnover": 0.1305,
+        "returns": 0.0782,
+        "drawdown": 0.0686,
+        "trainSharpe": 1.83,
+        "trainFitness": 1.59,
+        "testSharpe": -0.26,
+        "testFitness": -0.07
+      }
+    },
+    {
+      "id": "income_history_mnswz3dh",
+      "family": "fundamental-quality",
+      "expression": "ts_rank(operating_income, 252)",
+      "alphaId": "Gr3PvAVO",
+      "totalScore": 0.5976,
+      "scorecard": {
+        "strength": 0.4533,
+        "consistency": 0.3113,
+        "efficiency": 0.8054,
+        "diversity": 1,
+        "total": 0.5976
+      },
+      "metrics": {
+        "isSharpe": 1,
+        "isFitness": 0.61,
+        "turnover": 0.0476,
+        "returns": 0.0464,
+        "drawdown": 0.0973,
+        "trainSharpe": 1.22,
+        "trainFitness": 0.84,
+        "testSharpe": -0.07,
+        "testFitness": -0.01
+      }
+    }
+  ],
+  "memorySummary": {
+    "effectivePool": 0,
+    "deprecatedPool": 0,
+    "trajectories": 3,
+    "recentObjectives": [
+      {
+        "objective": "robust fundamental quality with low crowding",
+        "at": "2026-04-10T13:09:13.470Z"
+      }
+    ]
+  }
+}

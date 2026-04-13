@@ -1,0 +1,86 @@
+{
+  "mode": "generate",
+  "plan": {
+    "objective": "robust fundamental quality with low crowding",
+    "preferredFamilies": [
+      "fundamental-quality",
+      "fundamental-efficiency"
+    ],
+    "batchSize": 2,
+    "rounds": 1,
+    "focus": "robustness",
+    "avoidedSignatures": []
+  },
+  "generatedAt": "2026-04-10T16:41:15.300Z",
+  "batch": [
+    {
+      "id": "income_history_mnt4uqec",
+      "templateId": "income_history",
+      "family": "fundamental-quality",
+      "horizon": "slow",
+      "hypothesis": "Operating income strength versus its own history predicts relative outperformance.",
+      "expression": "ts_rank(operating_income, 252)",
+      "settings": {
+        "instrumentType": "EQUITY",
+        "region": "USA",
+        "universe": "TOP3000",
+        "delay": 1,
+        "decay": 0,
+        "neutralization": "SUBINDUSTRY",
+        "truncation": 0.08,
+        "pasteurization": "ON",
+        "unitHandling": "VERIFY",
+        "nanHandling": "OFF",
+        "language": "FASTEXPR",
+        "visualization": false,
+        "testPeriod": "P1Y"
+      },
+      "signature": [
+        "operating_income",
+        "ts_rank",
+        "252",
+        "history"
+      ],
+      "trajectoryId": "income_history-root",
+      "parentIds": [],
+      "agentNotes": [],
+      "plannerObjective": "robust fundamental quality with low crowding",
+      "stage": "generated"
+    },
+    {
+      "id": "income_asset_scale_mnt4uqec",
+      "templateId": "income_asset_scale",
+      "family": "fundamental-efficiency",
+      "horizon": "slow",
+      "hypothesis": "Operating income scaled by assets captures profitability efficiency.",
+      "expression": "ts_rank(operating_income / assets, 252)",
+      "settings": {
+        "instrumentType": "EQUITY",
+        "region": "USA",
+        "universe": "TOP3000",
+        "delay": 1,
+        "decay": 0,
+        "neutralization": "SUBINDUSTRY",
+        "truncation": 0.08,
+        "pasteurization": "ON",
+        "unitHandling": "VERIFY",
+        "nanHandling": "OFF",
+        "language": "FASTEXPR",
+        "visualization": false,
+        "testPeriod": "P1Y"
+      },
+      "signature": [
+        "operating_income",
+        "assets",
+        "ts_rank",
+        "252",
+        "efficiency"
+      ],
+      "trajectoryId": "income_asset_scale-root",
+      "parentIds": [],
+      "agentNotes": [],
+      "plannerObjective": "robust fundamental quality with low crowding",
+      "stage": "generated"
+    }
+  ]
+}

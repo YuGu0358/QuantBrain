@@ -1,0 +1,52 @@
+operators:
+  unary:
+    - abs
+    - log
+    - rank
+    - scale
+    - sign
+    - winsorize
+    - zscore
+  binary:
+    - correlation
+    - covariance
+    - divide
+    - group_neutralize
+    - group_rank
+    - max
+    - min
+    - multiply
+    - power
+    - regression_neut
+  time_series:
+    - delay
+    - delta
+    - hump
+    - ts_arg_max
+    - ts_arg_min
+    - ts_backfill
+    - ts_corr
+    - ts_covariance
+    - ts_decay_linear
+    - ts_delta
+    - ts_mean
+    - ts_rank
+    - ts_std_dev
+    - ts_sum
+    - ts_zscore
+fields:
+  - adv20
+  - assets
+  - cashflow_op
+  - close
+  - est_eps
+  - high
+  - industry
+  - low
+  - news_sentiment
+  - open
+  - operating_income
+  - returns
+  - subindustry
+  - volume
+  - vwap

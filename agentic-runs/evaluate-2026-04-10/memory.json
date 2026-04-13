@@ -1,0 +1,338 @@
+{
+  "effectivePool": [],
+  "deprecatedPool": [],
+  "trajectories": [
+    {
+      "id": "income_history_mnswz3dh",
+      "trajectoryId": "income_history-root",
+      "family": "fundamental-quality",
+      "horizon": "slow",
+      "hypothesis": "Operating income strength versus its own history predicts relative outperformance.",
+      "expression": "ts_rank(operating_income, 252)",
+      "settings": {
+        "instrumentType": "EQUITY",
+        "region": "USA",
+        "universe": "TOP3000",
+        "delay": 1,
+        "decay": 0,
+        "neutralization": "SUBINDUSTRY",
+        "truncation": 0.08,
+        "pasteurization": "ON",
+        "unitHandling": "VERIFY",
+        "nanHandling": "OFF",
+        "language": "FASTEXPR",
+        "visualization": false,
+        "testPeriod": "P1Y"
+      },
+      "signature": [
+        "operating_income",
+        "ts_rank",
+        "252",
+        "history"
+      ],
+      "parentIds": [],
+      "metrics": {
+        "isSharpe": 1,
+        "isFitness": 0.61,
+        "turnover": 0.0476,
+        "returns": 0.0464,
+        "drawdown": 0.0973,
+        "trainSharpe": 1.22,
+        "trainFitness": 0.84,
+        "testSharpe": -0.07,
+        "testFitness": -0.01
+      },
+      "checks": [
+        {
+          "name": "LOW_SHARPE",
+          "result": "FAIL",
+          "limit": 1.25,
+          "value": 1
+        },
+        {
+          "name": "LOW_FITNESS",
+          "result": "FAIL",
+          "limit": 1,
+          "value": 0.61
+        },
+        {
+          "name": "LOW_TURNOVER",
+          "result": "PASS",
+          "limit": 0.01,
+          "value": 0.0476
+        },
+        {
+          "name": "HIGH_TURNOVER",
+          "result": "PASS",
+          "limit": 0.7,
+          "value": 0.0476
+        },
+        {
+          "name": "CONCENTRATED_WEIGHT",
+          "result": "PASS"
+        },
+        {
+          "name": "LOW_SUB_UNIVERSE_SHARPE",
+          "result": "PASS",
+          "limit": 0.43,
+          "value": 0.76
+        },
+        {
+          "name": "SELF_CORRELATION",
+          "result": "PENDING"
+        },
+        {
+          "name": "MATCHES_COMPETITION",
+          "result": "PASS",
+          "competitions": [
+            {
+              "id": "challenge",
+              "name": "Challenge"
+            },
+            {
+              "id": "IQC2026S1",
+              "name": "International Quant Championship 2026 Stage 1"
+            }
+          ]
+        }
+      ],
+      "scorecard": {
+        "strength": 0.4533,
+        "consistency": 0.3113,
+        "efficiency": 0.8054,
+        "diversity": 1,
+        "total": 0.5976
+      },
+      "totalScore": 0.5976,
+      "alphaId": "Gr3PvAVO",
+      "simulationId": "SzNlJ6nC4qVbe91bsIOlozM",
+      "mutationReason": null,
+      "promotedTo": "watch",
+      "updatedAt": "2026-04-10T13:09:13.470Z"
+    },
+    {
+      "id": "income_asset_scale_mnswz3dh",
+      "trajectoryId": "income_asset_scale-root",
+      "family": "fundamental-efficiency",
+      "horizon": "slow",
+      "hypothesis": "Operating income scaled by assets captures profitability efficiency.",
+      "expression": "ts_rank(operating_income / assets, 252)",
+      "settings": {
+        "instrumentType": "EQUITY",
+        "region": "USA",
+        "universe": "TOP3000",
+        "delay": 1,
+        "decay": 0,
+        "neutralization": "SUBINDUSTRY",
+        "truncation": 0.08,
+        "pasteurization": "ON",
+        "unitHandling": "VERIFY",
+        "nanHandling": "OFF",
+        "language": "FASTEXPR",
+        "visualization": false,
+        "testPeriod": "P1Y"
+      },
+      "signature": [
+        "operating_income",
+        "assets",
+        "ts_rank",
+        "252",
+        "efficiency"
+      ],
+      "parentIds": [],
+      "metrics": {
+        "isSharpe": 0.92,
+        "isFitness": 0.5,
+        "turnover": 0.0488,
+        "returns": 0.0365,
+        "drawdown": 0.0545,
+        "trainSharpe": 1.07,
+        "trainFitness": 0.63,
+        "testSharpe": 0.29,
+        "testFitness": 0.09
+      },
+      "checks": [
+        {
+          "name": "LOW_SHARPE",
+          "result": "FAIL",
+          "limit": 1.25,
+          "value": 0.92
+        },
+        {
+          "name": "LOW_FITNESS",
+          "result": "FAIL",
+          "limit": 1,
+          "value": 0.5
+        },
+        {
+          "name": "LOW_TURNOVER",
+          "result": "PASS",
+          "limit": 0.01,
+          "value": 0.0488
+        },
+        {
+          "name": "HIGH_TURNOVER",
+          "result": "PASS",
+          "limit": 0.7,
+          "value": 0.0488
+        },
+        {
+          "name": "CONCENTRATED_WEIGHT",
+          "result": "PASS"
+        },
+        {
+          "name": "LOW_SUB_UNIVERSE_SHARPE",
+          "result": "PASS",
+          "limit": 0.4,
+          "value": 0.81
+        },
+        {
+          "name": "SELF_CORRELATION",
+          "result": "PENDING"
+        },
+        {
+          "name": "MATCHES_COMPETITION",
+          "result": "PASS",
+          "competitions": [
+            {
+              "id": "challenge",
+              "name": "Challenge"
+            },
+            {
+              "id": "IQC2026S1",
+              "name": "International Quant Championship 2026 Stage 1"
+            }
+          ]
+        }
+      ],
+      "scorecard": {
+        "strength": 0.3967,
+        "consistency": 0.8838,
+        "efficiency": 0.891,
+        "diversity": 1,
+        "total": 0.738
+      },
+      "totalScore": 0.738,
+      "alphaId": "78KWVrb1",
+      "simulationId": "2e34Qh9wd4Bkcqo6vylfbG6",
+      "mutationReason": null,
+      "promotedTo": "watch",
+      "updatedAt": "2026-04-10T13:09:13.470Z"
+    },
+    {
+      "id": "income_price_scale_mnswz3dh",
+      "trajectoryId": "income_price_scale-root",
+      "family": "fundamental-quality",
+      "horizon": "slow",
+      "hypothesis": "Scaling operating income by price improves cross-sectional comparability.",
+      "expression": "ts_rank(operating_income / close, 252)",
+      "settings": {
+        "instrumentType": "EQUITY",
+        "region": "USA",
+        "universe": "TOP3000",
+        "delay": 1,
+        "decay": 0,
+        "neutralization": "SUBINDUSTRY",
+        "truncation": 0.08,
+        "pasteurization": "ON",
+        "unitHandling": "VERIFY",
+        "nanHandling": "OFF",
+        "language": "FASTEXPR",
+        "visualization": false,
+        "testPeriod": "P1Y"
+      },
+      "signature": [
+        "operating_income",
+        "close",
+        "ts_rank",
+        "252",
+        "scale"
+      ],
+      "parentIds": [],
+      "metrics": {
+        "isSharpe": 1.51,
+        "isFitness": 1.17,
+        "turnover": 0.1305,
+        "returns": 0.0782,
+        "drawdown": 0.0686,
+        "trainSharpe": 1.83,
+        "trainFitness": 1.59,
+        "testSharpe": -0.26,
+        "testFitness": -0.07
+      },
+      "checks": [
+        {
+          "name": "LOW_SHARPE",
+          "result": "PASS",
+          "limit": 1.25,
+          "value": 1.51
+        },
+        {
+          "name": "LOW_FITNESS",
+          "result": "PASS",
+          "limit": 1,
+          "value": 1.17
+        },
+        {
+          "name": "LOW_TURNOVER",
+          "result": "PASS",
+          "limit": 0.01,
+          "value": 0.1305
+        },
+        {
+          "name": "HIGH_TURNOVER",
+          "result": "PASS",
+          "limit": 0.7,
+          "value": 0.1305
+        },
+        {
+          "name": "CONCENTRATED_WEIGHT",
+          "result": "PASS"
+        },
+        {
+          "name": "LOW_SUB_UNIVERSE_SHARPE",
+          "result": "PASS",
+          "limit": 0.65,
+          "value": 1.84
+        },
+        {
+          "name": "SELF_CORRELATION",
+          "result": "PENDING"
+        },
+        {
+          "name": "MATCHES_COMPETITION",
+          "result": "PASS",
+          "competitions": [
+            {
+              "id": "challenge",
+              "name": "Challenge"
+            },
+            {
+              "id": "IQC2026S1",
+              "name": "International Quant Championship 2026 Stage 1"
+            }
+          ]
+        }
+      ],
+      "scorecard": {
+        "strength": 0.7675,
+        "consistency": 0.1987,
+        "efficiency": 0.8628,
+        "diversity": 1,
+        "total": 0.6909
+      },
+      "totalScore": 0.6909,
+      "alphaId": "wpJqVEpl",
+      "simulationId": "4ozp0z8NX4H48wB7DVJpul5",
+      "mutationReason": null,
+      "promotedTo": "watch",
+      "updatedAt": "2026-04-10T13:09:13.470Z"
+    }
+  ],
+  "objectiveHistory": [
+    {
+      "objective": "robust fundamental quality with low crowding",
+      "at": "2026-04-10T13:09:13.470Z"
+    }
+  ]
+}

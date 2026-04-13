@@ -1,0 +1,29 @@
+categories:
+  MOMENTUM:
+    definition: "Medium-term trend continuation and residual momentum."
+    examples: ["12-1 momentum", "residual momentum"]
+    fields: ["returns", "close", "volume"]
+  REVERSAL:
+    definition: "Short-term mean reversion after price pressure."
+    examples: ["1-week reversal", "overnight reversal"]
+    fields: ["returns", "close", "volume"]
+  VOLATILITY:
+    definition: "Low volatility anomaly and volatility risk premia."
+    examples: ["idiosyncratic volatility", "vol-of-vol"]
+    fields: ["returns", "close"]
+  QUALITY:
+    definition: "Profitability quality and stability."
+    examples: ["ROE stability", "accruals"]
+    fields: ["operating_income", "assets", "cashflow_op"]
+  LIQUIDITY:
+    definition: "Liquidity premium and turnover anomaly."
+    examples: ["Amihud proxy", "turnover anomaly"]
+    fields: ["volume", "adv20", "close"]
+  MICROSTRUCTURE:
+    definition: "Intraday and market microstructure proxies."
+    examples: ["VWAP deviation", "order imbalance proxy"]
+    fields: ["vwap", "volume", "close"]
+  SENTIMENT:
+    definition: "Crowding, sentiment, and attention proxies."
+    examples: ["short-interest proxy", "abnormal volume"]
+    fields: ["volume", "returns", "news_sentiment"]

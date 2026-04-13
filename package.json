@@ -1,0 +1,16 @@
+{
+  "name": "worldquant-agentic-alpha-lab",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node service/server.mjs",
+    "agent:python": "python3 -m alpha_miner.main --mode generate --output-dir ./agentic-runs/python-smoke",
+    "agent:generate": "node service/agentic_alpha_lab.mjs --mode generate",
+    "agent:evaluate": "node service/agentic_alpha_lab.mjs --mode evaluate",
+    "test:diversity-v2": "node service/diversity_v2_test.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

@@ -1,0 +1,70 @@
+providers:
+  deepseek_v3:
+    role: generate
+    model_id: deepseek-chat
+    api_base: https://api.deepseek.com/v1
+    api_key_env: DEEPSEEK_API_KEY
+    client_type: openai_compat
+    cost_per_1k_input: 0.00027
+    cost_per_1k_output: 0.00110
+    weight_initial: 0.5
+
+  gemini_flash:
+    role: generate
+    model_id: gemini-1.5-flash
+    api_base: https://generativelanguage.googleapis.com/v1beta/openai/
+    api_key_env: GEMINI_API_KEY
+    client_type: openai_compat
+    cost_per_1k_input: 0.000075
+    cost_per_1k_output: 0.00030
+    weight_initial: 0.5
+
+  claude_haiku:
+    role: repair
+    model_id: claude-haiku-4-5-20251001
+    api_base: null
+    api_key_env: ANTHROPIC_API_KEY
+    client_type: anthropic
+    cost_per_1k_input: 0.00025
+    cost_per_1k_output: 0.00125
+    weight_initial: 0.75
+
+  gpt4o_mini_repair:
+    role: repair
+    model_id: gpt-4o-mini
+    api_base: null
+    api_key_env: OPENAI_API_KEY
+    client_type: openai_compat
+    cost_per_1k_input: 0.00015
+    cost_per_1k_output: 0.00060
+    weight_initial: 0.25
+
+  gpt4o_mini_judge:
+    role: judge
+    model_id: gpt-4o-mini
+    api_base: null
+    api_key_env: OPENAI_API_KEY
+    client_type: openai_compat
+    cost_per_1k_input: 0.00015
+    cost_per_1k_output: 0.00060
+    weight_initial: 1.0
+
+  gpt4o_mini_distill:
+    role: distill
+    model_id: gpt-4o-mini
+    api_base: null
+    api_key_env: OPENAI_API_KEY
+    client_type: openai_compat
+    cost_per_1k_input: 0.00015
+    cost_per_1k_output: 0.00060
+    weight_initial: 1.0
+
+  claude_sonnet_idea:
+    role: idea
+    model_id: claude-sonnet-4-6
+    api_base: null
+    api_key_env: ANTHROPIC_API_KEY
+    client_type: anthropic
+    cost_per_1k_input: 0.003
+    cost_per_1k_output: 0.015
+    weight_initial: 1.0

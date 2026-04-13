@@ -1,0 +1,14 @@
+[
+  {
+    "id": "wq101_001",
+    "expression": "rank(ts_arg_max(signed_power(((returns < 0) ? ts_std_dev(returns, 20) : close), 2.), 5)) - 0.5",
+    "is_negative_example": true,
+    "note": "Baseline WQ101-style alpha. Use as a negative example, not as a template to copy."
+  },
+  {
+    "id": "wq101_002",
+    "expression": "-1 * correlation(rank(delta(log(volume), 2)), rank(((close - open) / open)), 6)",
+    "is_negative_example": true,
+    "note": "Baseline WQ101-style alpha. Generated factors should be conceptually distinct."
+  }
+]

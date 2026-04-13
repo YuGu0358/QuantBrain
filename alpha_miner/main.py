@@ -1,0 +1,254 @@
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import time
+from dataclasses import asdict
+from pathlib import Path
+from typing import Any
+
+from alpha_miner.modules.llm_router import LLMRouter
+from alpha_miner.modules.m9_knowledge_distiller import KnowledgeDistiller
+
+from .modules.common import PACKAGE_ROOT, append_jsonl, read_json, set_seed, write_json
+from .modules.config_loader import load_config, load_taxonomy
+from .modules.llm_cache import LLMCache
+from .modules.m1_knowledge_base import KnowledgeBase
+from .modules.m2_hypothesis_agent import HypothesisAgent
+from .modules.m3_validator import ExpressionValidator
+from .modules.m4_brain_backtester import BrainBacktester, QuotaWaiting
+from .modules.m6_alpha_pool import AlphaPool, load_pnl_series
+from .modules.m7_stat_significance import StatSignificance
+from .modules.m8_portfolio_optimizer import PortfolioOptimizer
+
+
+def main() -> None:
+    args = parse_args()
+    started = time.time()
+    output_dir = Path(args.output_dir).resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for dirname in ["backtest_snapshots", "pnl_series", "llm_cache"]:
+        (output_dir / dirname).mkdir(parents=True, exist_ok=True)
+
+    config = load_config(Path(args.config).resolve() if args.config else None)
+    generation_cfg = config.get("generation", {})
+    set_seed(int(generation_cfg.get("seed", 42)))
+    progress_path = output_dir / "progress.jsonl"
+    append_jsonl(progress_path, {"stage": "started", "mode": args.mode, "objective": args.objective, "engine": "python-v2"})
+
+    kb = KnowledgeBase(output_dir / "alpha_pool.db")
+    kb.import_wq101_negative_examples(PACKAGE_ROOT / "seeds" / "wq101_alphas.json")
+    cache = LLMCache(output_dir / "llm_cache")
+    taxonomy = load_taxonomy()
+    router = None
+    if os.environ.get("LLM_ROUTER_ENABLED", "false").lower() == "true":
+        router = LLMRouter.from_yaml()
+        router._state_path = output_dir / "llm_router_state.json"
+        # load existing state if available
+        state_file = output_dir / "llm_router_state.json"
+        if state_file.exists():
+            router = LLMRouter.load_state(state_file)
+            router._state_path = state_file
+        router.daily_budget_usd = float(os.environ.get("LLM_BUDGET_DAILY_USD", "3.60"))
+    agent = HypothesisAgent(
+        kb=kb,
+        cache=cache,
+        taxonomy=taxonomy,
+        model=os.environ.get("OPENAI_IDEA_MODEL", "gpt-5.4-mini"),
+        temperature=float(generation_cfg.get("temperature", 0.4)),
+        top_p=float(generation_cfg.get("top_p", 0.9)),
+        max_tokens=int(generation_cfg.get("max_tokens", 800)),
+        seed=int(generation_cfg.get("seed", 42)),
+        router=router,
+        use_llm=(router is not None),
+    )
+    validator = ExpressionValidator()
+    stat = StatSignificance(
+        dsr_threshold=float(config.get("stat", {}).get("dsr_threshold", 0.95)),
+        pbo_threshold=float(config.get("stat", {}).get("pbo_threshold", 0.30)),
+    )
+    alpha_pool = AlphaPool(output_dir / "alpha_pool.db", threshold=float(config.get("pool", {}).get("orthogonality_threshold", 0.5)))
+    backtester = BrainBacktester(output_dir, config)
+    optimizer = PortfolioOptimizer(
+        max_weight=float(config.get("pool", {}).get("max_weight", 0.15)),
+        mcr_cap=float(config.get("pool", {}).get("mcr_cap", 0.25)),
+    )
+
+    batch_size = int(args.batch_size or generation_cfg.get("batch_size", 10))
+    category = args.category or agent.sample_underweight_category({})
+    candidates = agent.generate_batch(args.objective, category=category, n=batch_size, use_llm=args.use_llm)
+
+    validator_records = []
+    valid_candidates = []
+    rejected_by_stage = {"validator": 0, "dsr": 0, "pbo": 0, "oos": 0, "orthogonality": 0, "no_pnl": 0}
+    for candidate in candidates:
+        result = validator.validate(candidate.expression)
+        validator_records.append({"candidate": asdict(candidate), "validation": asdict(result)})
+        if result.is_valid:
+            valid_candidates.append(candidate)
+        else:
+            rejected_by_stage["validator"] += 1
+            append_jsonl(progress_path, {"stage": "rejected", "reason": "validator", "candidate_id": candidate.id, "errors": result.errors})
+
+    round_payload = {
+        "round": 1,
+        "mode": args.mode,
+        "category": category,
+        "objective": args.objective,
+        "candidates": validator_records,
+    }
+    write_json(output_dir / "batch-round-1.json", round_payload)
+
+    evaluated_records: list[dict[str, Any]] = []
+    portfolio_pool: list[dict[str, Any]] = []
+    phase0_status = phase0_mode(args.mode)
+    blocked_reason = phase0_status if phase0_status in {"phase0_brain_probe_report_missing", "phase0_brain_probe_not_actionable"} else None
+    degraded_mode = phase0_status == "regular_tier_degraded_no_daily_pnl"
+    if blocked_reason:
+        append_jsonl(progress_path, {"stage": "blocked", "reason": blocked_reason})
+    elif args.mode in {"evaluate", "loop"}:
+        for candidate in valid_candidates:
+            try:
+                result = backtester.submit_alpha(candidate.expression, period="IS")
+            except QuotaWaiting as error:
+                append_jsonl(progress_path, {"stage": "waiting", "reason": str(error)})
+                break
+            record = {"candidate": asdict(candidate), "backtest": asdict(result)}
+            if result.pnl_path:
+                pnl = load_pnl_series(Path(result.pnl_path))
+                dsr = stat.deflated_sharpe(result.sharpe or 0.0, [result.sharpe or 0.0], max(len(pnl), 2))
+                orthogonality = alpha_pool.check_orthogonality(pnl)
+                record["dsr"] = dsr
+                record["orthogonality"] = asdict(orthogonality)
+                if dsr < stat.dsr_threshold:
+                    rejected_by_stage["dsr"] += 1
+                elif not orthogonality.passed:
+                    rejected_by_stage["orthogonality"] += 1
+                else:
+                    metadata_json = json.dumps({"metrics": asdict(result), "candidate": asdict(candidate)}, ensure_ascii=False, sort_keys=True)
+                    alpha_pool.add_alpha(result.alpha_id or candidate.id, candidate.expression, candidate.category, Path(result.pnl_path), holdout_used=False, metadata_json=metadata_json)
+                    portfolio_pool.append({"alpha_id": result.alpha_id or candidate.id, "pnl": pnl})
+            else:
+                rejected_by_stage["no_pnl"] += 1
+                record["status"] = "no_daily_pnl"
+                record["dailyPnlPolicy"] = "blocked_for_dsr_mvo"
+                record["expressionProxyOrthogonality"] = asdict(
+                    alpha_pool.check_expression_similarity(
+                        candidate.expression,
+                        threshold=float(config.get("pool", {}).get("expression_similarity_threshold", 0.80)),
+                    )
+                )
+                if degraded_mode and result.alpha_id:
+                    try:
+                        brain_check = backtester.check_alpha(result.alpha_id)
+                        record["brainCheckOrthogonality"] = asdict(brain_check)
+                        if brain_check.passed is False:
+                            rejected_by_stage["orthogonality"] += 1
+                    except QuotaWaiting as error:
+                        append_jsonl(progress_path, {"stage": "waiting", "reason": str(error), "alpha_id": result.alpha_id})
+                        record["brainCheckOrthogonality"] = {"status": "waiting", "reason": str(error)}
+                append_jsonl(
+                    progress_path,
+                    {
+                        "stage": "degraded_evaluation",
+                        "candidate_id": candidate.id,
+                        "alpha_id": result.alpha_id,
+                        "reason": "regular tier exposes aggregate metrics but no daily pnl",
+                    },
+                )
+            evaluated_records.append(record)
+            append_jsonl(progress_path, {"stage": "evaluated", "candidate_id": candidate.id, "status": result.status})
+
+    portfolio = optimizer.optimize(portfolio_pool)
+    write_json(output_dir / "portfolio.json", asdict(portfolio))
+    pool_payload = {
+        "qualified": len(portfolio_pool),
+        "blockedReason": blocked_reason,
+        "phase0Status": phase0_status,
+        "degradedMode": degraded_mode,
+        "records": evaluated_records,
+    }
+    write_json(output_dir / "pool.json", pool_payload)
+    memory = {"effectivePool": portfolio_pool, "deprecatedPool": [], "trajectories": validator_records, "objectiveHistory": [{"objective": args.objective}]}
+    write_json(output_dir / "memory.json", memory)
+
+    summary = {
+        "engine": "python-v2",
+        "mode": args.mode,
+        "objective": args.objective,
+        "category": category,
+        "phase0Status": phase0_status,
+        "degradedMode": degraded_mode,
+        "generatedCandidates": len(candidates),
+        "validCandidates": len(valid_candidates),
+        "qualified_alphas_count": len(portfolio_pool),
+        "degraded_candidates_count": sum(1 for record in evaluated_records if record.get("status") == "no_daily_pnl"),
+        "total_llm_tokens": {"prompt": 0, "completion": 0},
+        "total_llm_cost_usd": 0.0,
+        "total_brain_simulations": len(evaluated_records),
+        "total_runtime_seconds": round(time.time() - started, 4),
+        "rejected_by_stage": rejected_by_stage,
+        "topCandidates": [
+            {
+                "id": record["candidate"]["id"],
+                "family": record["candidate"]["category"],
+                "expression": record["candidate"]["expression"],
+                "alphaId": record.get("backtest", {}).get("alpha_id"),
+                "totalScore": record.get("dsr"),
+                "scorecard": {
+                    "submission": "blocked" if blocked_reason else ("degraded_no_daily_pnl" if record.get("status") == "no_daily_pnl" else "evaluated"),
+                    "brainCheck": record.get("brainCheckOrthogonality", {}).get("passed"),
+                },
+                "metrics": record.get("backtest", {}),
+            }
+            for record in evaluated_records[:10]
+        ],
+    }
+    write_json(output_dir / "summary.json", summary)
+    if os.environ.get("KNOWLEDGE_DISTILL_ENABLED", "false").lower() == "true" and router is not None:
+        try:
+            from alpha_miner.modules.common import read_json
+
+            pool_data = read_json(output_dir / "pool.json", default={})
+            distiller = KnowledgeDistiller(kb=kb, router=router)
+            distiller.distill(pool_data)
+        except Exception as exc:
+            print(f"[distiller] skipped: {exc}")
+    if router is not None:
+        router.save_state(output_dir / "llm_router_state.json")
+    append_jsonl(progress_path, {"stage": "finished", "summary": summary})
+    print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
+
+
+def phase0_mode(mode: str) -> str:
+    if mode == "generate":
+        return "not_required_for_generate"
+    report = Path("docs/phase0_brain_probe_report.md")
+    if not report.exists():
+        return "phase0_brain_probe_report_missing"
+    text = report.read_text(encoding="utf-8")
+    if "- Decision: Case A" in text or "- Decision: Case B" in text:
+        return "daily_pnl_available"
+    if "- Decision: Case C" in text:
+        return "regular_tier_degraded_no_daily_pnl"
+    return "phase0_brain_probe_not_actionable"
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="QuantBrain LLM alpha mining v2.1 runner")
+    parser.add_argument("--mode", choices=["generate", "evaluate", "loop"], default="generate")
+    parser.add_argument("--objective", default="discover robust US equity alphas")
+    parser.add_argument("--output-dir", required=True)
+    parser.add_argument("--batch-size", type=int, default=None)
+    parser.add_argument("--rounds", type=int, default=1)
+    parser.add_argument("--category", default=None)
+    parser.add_argument("--config", default=None)
+    parser.add_argument("--resume-from", default=None)
+    parser.add_argument("--use-llm", action="store_true")
+    parser.add_argument("--verbose", default="true")
+    return parser.parse_args()
+
+
+if __name__ == "__main__":
+    main()

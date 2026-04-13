@@ -1,0 +1,12 @@
+[
+  {
+    "category": "QUALITY",
+    "hypothesis": "Peer-relative operating-income efficiency captures persistent quality while reducing sector structure.",
+    "expression": "group_rank(ts_rank(operating_income / assets, 252), industry)"
+  },
+  {
+    "category": "REVERSAL",
+    "hypothesis": "Recent price pressure with volume exhaustion can revert over short horizons.",
+    "expression": "rank(ts_delta(volume, 20)) * rank(-returns)"
+  }
+]

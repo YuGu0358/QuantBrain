@@ -1,0 +1,10 @@
+.env
+__pycache__/
+*.pyc
+*.pyo
+node_modules/
+.DS_Store
+output/
+*.db
+*.json.bak
+.superpowers/

@@ -1,0 +1,53 @@
+engine:
+  default: python-v2
+
+splits:
+  is_start: 2015-01-01
+  is_end: 2021-12-31
+  val_start: 2022-01-01
+  val_end: 2022-12-31
+  oos_start: 2023-01-01
+  oos_end: 2025-12-31
+
+cv:
+  n_splits: 5
+  purge_days: 10
+  embargo_days: 5
+
+stat:
+  dsr_threshold: 0.95
+  pbo_threshold: 0.30
+
+pool:
+  orthogonality_threshold: 0.50
+  brain_check_correlation_threshold: 0.70
+  expression_similarity_threshold: 0.80
+  metric_similarity_threshold: 0.95
+  max_weight: 0.15
+  mcr_cap: 0.25
+
+costs:
+  spread_bps: 5
+  impact_bps_at_half_turnover: 2
+  borrow_bps: 40
+
+generation:
+  temperature: 0.4
+  top_p: 0.9
+  max_tokens: 800
+  batch_size: 10
+  max_optimization_rounds: 3
+  target_qualified_alphas: 30
+  seed: 42
+
+brain:
+  rate_limit_per_minute: 8
+  rate_limit_per_day: 500
+  on_quota_exhausted: wait
+  poll_timeout_seconds: 900
+  poll_interval_seconds: 5
+
+pnl:
+  regular_tier_fallback: brain_check_and_aggregate_proxy
+  require_daily_for_dsr: true
+  require_daily_for_mvo: true

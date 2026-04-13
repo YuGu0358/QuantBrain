@@ -1,0 +1,14 @@
+services:
+  worldquant-agentic-alpha-lab:
+    build: .
+    image: worldquant-agentic-alpha-lab:latest
+    ports:
+      - "${PORT:-3000}:3000"
+    env_file:
+      - .env
+    environment:
+      PORT: 3000
+      RUNS_DIR: /app/cloud-runs
+    volumes:
+      - ./cloud-runs:/app/cloud-runs
+    restart: unless-stopped
