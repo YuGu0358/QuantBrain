@@ -2153,11 +2153,11 @@ body {
     QuantBrain
   </div>
   <div class="nav-links">
-    <div class="nav-link active">Overview</div>
-    <div class="nav-link">Pipeline</div>
-    <div class="nav-link">Knowledge</div>
-    <div class="nav-link">Runs</div>
-    <div class="nav-link">Settings</div>
+    <div class="nav-link active" data-tab="overview">Overview</div>
+    <div class="nav-link" data-tab="pipeline">Pipeline</div>
+    <div class="nav-link" data-tab="knowledge">Knowledge</div>
+    <div class="nav-link" data-tab="runs">Runs</div>
+    <div class="nav-link" data-tab="settings">Settings</div>
   </div>
   <div class="nav-right">
     <div class="live-badge">
@@ -2167,7 +2167,8 @@ body {
   </div>
 </div>
 
-<!-- Cards -->
+<!-- Panels -->
+<div id="panel-overview" class="panel">
 <div class="layout">
 
   <!-- Card 1: Metrics + Pipeline -->
@@ -2321,6 +2322,79 @@ body {
   </div>
 
 </div>
+</div><!-- /panel-overview -->
+
+<!-- Panel: Pipeline -->
+<div id="panel-pipeline" class="panel" style="display:none;padding:28px;overflow-y:auto;flex:1">
+  <div class="eyebrow" style="margin-bottom:20px">Active Runs</div>
+  <div id="pipeline-active" style="font-size:13px;color:#86868b">No active runs</div>
+  <div class="divider" style="margin:24px 0"></div>
+  <div class="eyebrow" style="margin-bottom:16px">Pipeline Stages</div>
+  <div class="pipeline" id="pipeline-stages">
+    <div class="p-stage"><div class="p-num blue" id="ps-gen">–</div><div class="p-label">Generate</div></div>
+    <div class="p-stage"><div class="p-num yellow" id="ps-val">–</div><div class="p-label">Validate</div></div>
+    <div class="p-stage"><div class="p-num purple" id="ps-sim">–</div><div class="p-label">Simulate</div></div>
+    <div class="p-stage"><div class="p-num red" id="ps-gate">–</div><div class="p-label">Gate</div></div>
+    <div class="p-stage"><div class="p-num green" id="ps-sub">–</div><div class="p-label">Submit</div></div>
+  </div>
+  <div class="divider" style="margin:24px 0"></div>
+  <div class="eyebrow" style="margin-bottom:12px">Progress Log</div>
+  <div id="pipeline-log" style="font-family:monospace;font-size:11px;color:#3a3a3c;background:#f5f5f7;border-radius:8px;padding:12px;max-height:280px;overflow-y:auto;white-space:pre-wrap;word-break:break-all"></div>
+</div>
+
+<!-- Panel: Knowledge -->
+<div id="panel-knowledge" class="panel" style="display:none;padding:28px;overflow-y:auto;flex:1">
+  <div class="eyebrow" style="margin-bottom:20px">LLM Router — All Providers</div>
+  <div id="knowledge-llm" style="font-size:13px;color:#86868b">Loading…</div>
+  <div class="divider" style="margin:24px 0"></div>
+  <div class="eyebrow" style="margin-bottom:16px">Budget</div>
+  <div id="knowledge-budget" style="font-size:13px;color:#3a3a3c">–</div>
+</div>
+
+<!-- Panel: Runs -->
+<div id="panel-runs" class="panel" style="display:none;padding:28px;overflow-y:auto;flex:1">
+  <div class="eyebrow" style="margin-bottom:16px">Recent Runs</div>
+  <div id="runs-list" style="font-size:13px;color:#86868b">Loading…</div>
+</div>
+
+<!-- Panel: Settings -->
+<div id="panel-settings" class="panel" style="display:none;padding:28px;overflow-y:auto;flex:1;max-width:520px">
+  <div class="eyebrow" style="margin-bottom:20px">Scheduler Settings</div>
+  <div style="display:flex;flex-direction:column;gap:16px" id="settings-form">
+    <label style="display:flex;flex-direction:column;gap:6px;font-size:13px;color:#3a3a3c">
+      Enabled
+      <select id="s-enabled" style="padding:8px 10px;border-radius:8px;border:1px solid #d2d2d7;font-size:13px;background:#fff">
+        <option value="true">Yes</option><option value="false">No</option>
+      </select>
+    </label>
+    <label style="display:flex;flex-direction:column;gap:6px;font-size:13px;color:#3a3a3c">
+      Mode
+      <select id="s-mode" style="padding:8px 10px;border-radius:8px;border:1px solid #d2d2d7;font-size:13px;background:#fff">
+        <option value="evaluate">evaluate</option>
+        <option value="loop">loop</option>
+        <option value="generate">generate</option>
+      </select>
+    </label>
+    <label style="display:flex;flex-direction:column;gap:6px;font-size:13px;color:#3a3a3c">
+      Interval (minutes)
+      <input id="s-interval" type="number" min="15" style="padding:8px 10px;border-radius:8px;border:1px solid #d2d2d7;font-size:13px">
+    </label>
+    <label style="display:flex;flex-direction:column;gap:6px;font-size:13px;color:#3a3a3c">
+      Batch Size
+      <input id="s-batch" type="number" min="1" style="padding:8px 10px;border-radius:8px;border:1px solid #d2d2d7;font-size:13px">
+    </label>
+    <label style="display:flex;flex-direction:column;gap:6px;font-size:13px;color:#3a3a3c">
+      Rounds
+      <input id="s-rounds" type="number" min="1" style="padding:8px 10px;border-radius:8px;border:1px solid #d2d2d7;font-size:13px">
+    </label>
+    <label style="display:flex;flex-direction:column;gap:6px;font-size:13px;color:#3a3a3c">
+      Objective
+      <input id="s-objective" type="text" style="padding:8px 10px;border-radius:8px;border:1px solid #d2d2d7;font-size:13px">
+    </label>
+    <button id="s-save" style="margin-top:8px;padding:10px 24px;border-radius:20px;border:none;background:#1d1d1f;color:#fff;font-size:14px;font-weight:500;cursor:pointer">Save Settings</button>
+    <div id="s-status" style="font-size:12px;color:#86868b;min-height:16px"></div>
+  </div>
+</div>
 
 </body>
 <script>
@@ -2371,6 +2445,81 @@ body {
       const passed = recent.filter(x => x.summary?.passedGate).length;
       if (sv[1]) sv[1].textContent = recent.length ? Math.round(passed / recent.length * 100) + '%' : '–';
       if (sv[2] && lr) sv[2].textContent = '$' + (lr.spent_usd ?? 0).toFixed(2) + ' / $' + (lr.daily_budget_usd ?? 3.6).toFixed(2);
+
+      // ── Pipeline panel ──
+      const activeEl = document.getElementById('pipeline-active');
+      if (activeEl) {
+        const activeRuns = d.active ?? [];
+        if (activeRuns.length) {
+          activeEl.innerHTML = activeRuns.map(r =>
+            '<div style="background:#fff;border-radius:10px;padding:12px 14px;margin-bottom:8px;border:1px solid rgba(0,0,0,0.06)">' +
+            '<div style="font-weight:500;font-size:13px">' + esc(r.runId) + '</div>' +
+            '<div style="font-size:11px;color:#86868b;margin-top:3px">' + esc(r.status) + ' · ' + esc(r.engine ?? '') + '</div>' +
+            '</div>'
+          ).join('');
+        } else {
+          activeEl.textContent = 'No active runs';
+        }
+        // progress log from most recent run
+        const logEl = document.getElementById('pipeline-log');
+        if (logEl) {
+          const recent0 = d.recent?.[0];
+          if (recent0?.progressTail?.length) {
+            logEl.textContent = recent0.progressTail.map(l => l.msg ?? JSON.stringify(l)).join('\n');
+          } else {
+            logEl.textContent = 'No progress data';
+          }
+        }
+      }
+
+      // ── Knowledge panel ──
+      const kllm = document.getElementById('knowledge-llm');
+      if (kllm && lr?.providers) {
+        kllm.innerHTML = '<table style="width:100%;border-collapse:collapse;font-size:12px">' +
+          '<tr style="color:#86868b;border-bottom:1px solid #e5e5ea"><th style="text-align:left;padding:6px 8px">Provider</th><th style="padding:6px 8px">Role</th><th style="padding:6px 8px">Win Rate</th><th style="padding:6px 8px">Calls</th><th style="padding:6px 8px">Wins</th></tr>' +
+          Object.entries(lr.providers).map(([n, p]) => {
+            const wr = ((p.win_rate ?? 0.5) * 100).toFixed(1);
+            const col = (p.win_rate ?? 0.5) >= 0.5 ? '#34c759' : '#ff9f0a';
+            return '<tr style="border-bottom:1px solid #f2f2f7">' +
+              '<td style="padding:8px;font-weight:500">' + esc(n) + '</td>' +
+              '<td style="padding:8px;text-align:center;color:#86868b">' + esc(p.role ?? '–') + '</td>' +
+              '<td style="padding:8px;text-align:center;color:' + col + ';font-weight:600">' + wr + '%</td>' +
+              '<td style="padding:8px;text-align:center">' + (p.calls ?? 0) + '</td>' +
+              '<td style="padding:8px;text-align:center">' + (p.wins ?? 0) + '</td>' +
+              '</tr>';
+          }).join('') + '</table>';
+        const kb = document.getElementById('knowledge-budget');
+        if (kb) kb.innerHTML =
+          '<div style="display:flex;gap:24px">' +
+          '<div><div style="font-size:11px;color:#86868b;margin-bottom:4px">Spent Today</div><div style="font-size:20px;font-weight:600">$' + (lr.spent_usd ?? 0).toFixed(3) + '</div></div>' +
+          '<div><div style="font-size:11px;color:#86868b;margin-bottom:4px">Daily Budget</div><div style="font-size:20px;font-weight:600">$' + (lr.daily_budget_usd ?? 3.6).toFixed(2) + '</div></div>' +
+          '<div><div style="font-size:11px;color:#86868b;margin-bottom:4px">Remaining</div><div style="font-size:20px;font-weight:600;color:#34c759">$' + Math.max(0, (lr.daily_budget_usd ?? 3.6) - (lr.spent_usd ?? 0)).toFixed(3) + '</div></div>' +
+          '</div>';
+      }
+
+      // ── Runs panel ──
+      const rl2 = document.getElementById('runs-list');
+      if (rl2) {
+        const runs = d.recent ?? [];
+        if (runs.length) {
+          rl2.innerHTML = '<table style="width:100%;border-collapse:collapse;font-size:12px">' +
+            '<tr style="color:#86868b;border-bottom:1px solid #e5e5ea"><th style="text-align:left;padding:6px 8px">Run ID</th><th style="padding:6px 8px">Status</th><th style="padding:6px 8px">Engine</th><th style="padding:6px 8px">Submitted</th><th style="padding:6px 8px">Sharpe</th></tr>' +
+            runs.slice(0, 20).map(r => {
+              const s = r.state ?? {};
+              const sum = r.summary ?? {};
+              const statusCol = s.status === 'completed' ? '#34c759' : s.status === 'running' ? '#007aff' : '#86868b';
+              return '<tr style="border-bottom:1px solid #f2f2f7">' +
+                '<td style="padding:8px;font-family:monospace;font-size:11px">' + esc(r.runId?.slice(-12) ?? '–') + '</td>' +
+                '<td style="padding:8px;text-align:center;color:' + statusCol + '">' + esc(s.status ?? '–') + '</td>' +
+                '<td style="padding:8px;text-align:center;color:#86868b">' + esc(s.engine ?? '–') + '</td>' +
+                '<td style="padding:8px;text-align:center">' + (sum.submitted ?? '–') + '</td>' +
+                '<td style="padding:8px;text-align:center">' + (sum.bestSharpe != null ? sum.bestSharpe.toFixed(2) : '–') + '</td>' +
+                '</tr>';
+            }).join('') + '</table>';
+        } else {
+          rl2.textContent = 'No runs found';
+        }
+      }
 
       // LLM rows
       const ll = document.querySelector('.llm-list');
@@ -2423,11 +2572,60 @@ body {
   setInterval(poll, 10000);
 
   // ── Nav tabs ──
+  function showPanel(tab) {
+    document.querySelectorAll('.panel').forEach(p => p.style.display = 'none');
+    const el = document.getElementById('panel-' + tab);
+    if (el) el.style.display = tab === 'overview' ? '' : 'flex';
+    if (tab === 'overview') el.style.display = '';
+  }
   document.querySelectorAll('.nav-link').forEach(a => a.addEventListener('click', function(e) {
     e.preventDefault();
     document.querySelectorAll('.nav-link').forEach(x => x.classList.remove('active'));
     this.classList.add('active');
+    showPanel(this.dataset.tab ?? 'overview');
   }));
+
+  // ── Settings panel load + save ──
+  let settingsLoaded = false;
+  async function loadSettings() {
+    if (settingsLoaded) return;
+    try {
+      const r = await fetch('/scheduler', { headers: h });
+      const d = await r.json();
+      const g = id => document.getElementById(id);
+      if (g('s-enabled')) g('s-enabled').value = String(d.enabled ?? false);
+      if (g('s-mode')) g('s-mode').value = d.mode ?? 'evaluate';
+      if (g('s-interval')) g('s-interval').value = d.intervalMinutes ?? 60;
+      if (g('s-batch')) g('s-batch').value = d.batchSize ?? 5;
+      if (g('s-rounds')) g('s-rounds').value = d.rounds ?? 3;
+      if (g('s-objective')) g('s-objective').value = d.objective ?? '';
+      settingsLoaded = true;
+    } catch (e) {}
+  }
+  document.getElementById('s-save')?.addEventListener('click', async function() {
+    const g = id => document.getElementById(id);
+    const st = document.getElementById('s-status');
+    this.disabled = true; this.textContent = 'Saving…';
+    try {
+      const body = {
+        enabled: g('s-enabled')?.value === 'true',
+        mode: g('s-mode')?.value,
+        intervalMinutes: Number(g('s-interval')?.value),
+        batchSize: Number(g('s-batch')?.value),
+        rounds: Number(g('s-rounds')?.value),
+        objective: g('s-objective')?.value?.trim(),
+      };
+      const r = await fetch('/scheduler', { method: 'POST', headers: h, body: JSON.stringify(body) });
+      if (r.ok) { if (st) st.textContent = 'Saved ✓'; }
+      else { if (st) st.textContent = 'Error: ' + r.status; }
+    } catch (e) { if (st) st.textContent = 'Error: ' + e.message; }
+    this.disabled = false; this.textContent = 'Save Settings';
+    setTimeout(() => { if (st) st.textContent = ''; }, 3000);
+  });
+  // Load settings when user clicks the tab
+  document.querySelectorAll('.nav-link').forEach(a => {
+    if (a.dataset.tab === 'settings') a.addEventListener('click', loadSettings);
+  });
 
   // ── Optimize & Run button ──
   const btn = document.querySelector('.run-btn');
