@@ -2168,7 +2168,7 @@ body {
 </div>
 
 <!-- Panels -->
-<div id="panel-overview" class="panel">
+<div id="panel-overview" class="panel" style="display:flex;flex:1;overflow:hidden">
 <div class="layout">
 
   <!-- Card 1: Metrics + Pipeline -->
@@ -2575,8 +2575,7 @@ body {
   function showPanel(tab) {
     document.querySelectorAll('.panel').forEach(p => p.style.display = 'none');
     const el = document.getElementById('panel-' + tab);
-    if (el) el.style.display = tab === 'overview' ? '' : 'flex';
-    if (tab === 'overview') el.style.display = '';
+    if (el) el.style.display = tab === 'overview' ? 'flex' : 'flex';
   }
   document.querySelectorAll('.nav-link').forEach(a => a.addEventListener('click', function(e) {
     e.preventDefault();
