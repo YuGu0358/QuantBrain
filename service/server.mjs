@@ -1907,6 +1907,7 @@ function dashboardHtml() {
 <html>
 <head>
 <meta charset="utf-8">
+<meta name="dashboard-token" content="${process.env.DASHBOARD_TOKEN ?? ''}">
 <title>QuantBrain Dashboard v3</title>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -2322,6 +2323,148 @@ body {
 </div>
 
 </body>
+<script>
+(function(){
+  const token = document.querySelector('meta[name=dashboard-token]').content;
+  const h = token
+    ? { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' }
+    : { 'Content-Type': 'application/json' };
+
+  function esc(s) {
+    return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  // ── Countdown ──
+  let nextRunAt = null;
+  function tickCd() {
+    const el = document.querySelector('.cd-time');
+    if (!el) return;
+    if (!nextRunAt) { el.textContent = '–'; return; }
+    const ms = new Date(nextRunAt) - Date.now();
+    if (ms <= 0) { el.textContent = '00:00'; return; }
+    el.textContent = String(Math.floor(ms / 60000)).padStart(2, '0') + ':' +
+                     String(Math.floor((ms % 60000) / 1000)).padStart(2, '0');
+  }
+  setInterval(tickCd, 1000);
+  async function fetchSched() {
+    try {
+      const r = await fetch('/scheduler', { headers: h });
+      const d = await r.json();
+      nextRunAt = d.nextRunAt ?? null;
+    } catch (e) {}
+  }
+  fetchSched();
+  setInterval(fetchSched, 30000);
+
+  // ── Poll /runs every 10s ──
+  async function poll() {
+    try {
+      const r = await fetch('/runs', { headers: h });
+      const d = await r.json();
+      const al = d.autoLoop ?? {};
+      const lr = d.llmRouterState ?? null;
+
+      // Stat cards
+      const sv = document.querySelectorAll('.stat-val');
+      if (sv[0]) sv[0].textContent = al.submitted?.length ?? 0;
+      const recent = d.recent ?? [];
+      const passed = recent.filter(x => x.summary?.passedGate).length;
+      if (sv[1]) sv[1].textContent = recent.length ? Math.round(passed / recent.length * 100) + '%' : '–';
+      if (sv[2] && lr) sv[2].textContent = '$' + (lr.spent_usd ?? 0).toFixed(2) + ' / $' + (lr.daily_budget_usd ?? 3.6).toFixed(2);
+
+      // LLM rows
+      const ll = document.querySelector('.llm-list');
+      if (ll && lr?.providers) {
+        ll.innerHTML = Object.entries(lr.providers).slice(0, 4).map(([n, p]) => {
+          const wr = ((p.win_rate ?? 0.5) * 100).toFixed(0);
+          const col = (p.win_rate ?? 0.5) >= 0.5 ? '#34c759' : '#ff9f0a';
+          return '<div>' +
+            '<div class="llm-header">' +
+              '<div><span class="llm-name">' + esc(n) + '</span>' +
+              '<span class="llm-role-tag">' + esc(p.role ?? '') + ' · ' + wr + '%</span></div>' +
+              '<div class="llm-rate" style="color:' + col + '">' + wr + '% pass</div>' +
+            '</div>' +
+            '<div class="bar-track"><div class="bar-fill" style="background:' + col + ';width:' + wr + '%"></div></div>' +
+          '</div>';
+        }).join('');
+      }
+
+      // Repair queue
+      const rl = document.querySelector('.repair-list');
+      if (rl) {
+        const q = al.queue?.slice(0, 3) ?? [];
+        rl.innerHTML = q.length
+          ? q.map(x => '<div class="repair-row"><div class="r-expr">' + esc(x.expression) + '</div>' +
+              '<div class="r-tag">' + esc(x.reason) + '</div>' +
+              '<div class="r-depth">' + esc(x.depth) + '</div></div>').join('')
+          : '<div class="repair-row"><div class="r-expr" style="color:#86868b">Queue empty</div></div>';
+      }
+
+      // Activity feed
+      const af = document.querySelector('.activity-feed');
+      if (af) {
+        const ev = (al.events ?? []).slice(0, 4);
+        af.innerHTML = ev.length
+          ? ev.map(e => {
+              const cls = e.type === 'submitted' ? 'submit' : e.type === 'repair' ? 'repair' : 'fail';
+              const icon = e.type === 'submitted' ? '↑' : e.type === 'repair' ? '⟳' : '✕';
+              return '<div class="act-item">' +
+                '<div class="act-icon ' + cls + '">' + icon + '</div>' +
+                '<div class="act-body">' +
+                  '<div class="act-expr">' + esc(e.alphaId ?? e.expression ?? '–') + '</div>' +
+                  '<div class="act-meta">' + esc(e.message ?? e.type ?? '') + '</div>' +
+                '</div></div>';
+            }).join('')
+          : '<div class="act-item"><div class="act-body"><div class="act-meta" style="color:#86868b">No recent activity</div></div></div>';
+      }
+    } catch (e) {}
+  }
+  poll();
+  setInterval(poll, 10000);
+
+  // ── Nav tabs ──
+  document.querySelectorAll('.nav-link').forEach(a => a.addEventListener('click', function(e) {
+    e.preventDefault();
+    document.querySelectorAll('.nav-link').forEach(x => x.classList.remove('active'));
+    this.classList.add('active');
+  }));
+
+  // ── Optimize & Run button ──
+  const btn = document.querySelector('.run-btn');
+  if (btn) {
+    const statusEl = document.createElement('div');
+    statusEl.style.cssText = 'font-size:12px;color:#86868b;margin-top:8px;min-height:16px;';
+    btn.parentNode.insertBefore(statusEl, btn.nextSibling);
+
+    btn.addEventListener('click', async function() {
+      const idea = document.querySelector('.idea-field')?.value?.trim();
+      if (!idea) { statusEl.textContent = 'Please enter an idea'; return; }
+      btn.disabled = true;
+      btn.textContent = 'Optimizing…';
+      statusEl.textContent = '';
+      try {
+        const or = await fetch('/ideas/optimize', { method: 'POST', headers: h, body: JSON.stringify({ idea }) });
+        const od = await or.json();
+        statusEl.textContent = 'Direction: ' + esc(od.direction ?? od.target_family ?? '');
+        btn.textContent = 'Starting run…';
+        const rr = await fetch('/runs', { method: 'POST', headers: h, body: JSON.stringify({ force: false }) });
+        if (rr.status === 409) {
+          statusEl.textContent = 'Run already active';
+          btn.disabled = false;
+          btn.textContent = 'Optimize & Run';
+          return;
+        }
+        btn.textContent = 'Run Started ✓';
+        setTimeout(() => { btn.disabled = false; btn.textContent = 'Optimize & Run'; }, 3000);
+      } catch (e) {
+        statusEl.textContent = 'Error: ' + e.message;
+        btn.disabled = false;
+        btn.textContent = 'Optimize & Run';
+      }
+    });
+  }
+})();
+</script>
 </html>
 `;
 }
