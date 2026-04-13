@@ -25,6 +25,7 @@ const PORT = Number(process.env.PORT ?? 3000);
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN ?? "";
 const CREDENTIALS_SECRET = process.env.CREDENTIALS_SECRET ?? "";
 const DASHBOARD_USERS = parseDashboardUsers(process.env.DASHBOARD_USERS ?? "");
+const REGISTRATION_CODE = process.env.REGISTRATION_CODE ?? "";
 const OPENAI_IDEA_MODEL = process.env.OPENAI_IDEA_MODEL ?? "gpt-5.4-mini";
 const OPENAI_OPTIMIZE_MODEL = "gpt-4o-mini";
 const OPTIMIZE_IDEA_SYSTEM_PROMPT =
@@ -81,6 +82,7 @@ const schedulerState = {
 await mkdir(RUNS_DIR, { recursive: true });
 await mkdir(IDEAS_DIR, { recursive: true });
 await mkdir(CREDENTIALS_DIR, { recursive: true });
+const userRegistry = await loadUserRegistry();
 let autoLoopState = await loadAutoLoopState();
 scheduleNextRun("startup");
 
@@ -91,6 +93,16 @@ const server = createServer(async (req, res) => {
 
     if (req.method === "GET" && url.pathname === "/") {
       return sendHtml(res, 200, dashboardHtml());
+    }
+
+    if (req.method === "GET" && url.pathname === "/setup") {
+      return sendHtml(res, 200, setupHtml());
+    }
+
+    if (req.method === "POST" && url.pathname === "/account/register") {
+      const body = await readJson(req);
+      const result = await registerUser(body);
+      return sendJson(res, result.ok ? 201 : 400, result);
     }
 
     if (req.method === "GET" && url.pathname === "/health") {
@@ -1559,6 +1571,44 @@ function runningRuns(authContext = null) {
   });
 }
 
+const USER_REGISTRY_PATH = path.resolve(CREDENTIALS_DIR, "user-registry.json");
+
+async function loadUserRegistry() {
+  const data = await maybeReadJson(USER_REGISTRY_PATH);
+  return Array.isArray(data) ? data : [];
+}
+
+async function saveUserRegistry(registry) {
+  await writeFile(USER_REGISTRY_PATH, JSON.stringify(registry, null, 2) + "\n", { mode: 0o600 });
+}
+
+async function registerUser(body) {
+  const userId = sanitizeOwnerId(String(body?.userId ?? "").trim());
+  const email = String(body?.email ?? "").trim();
+  const password = String(body?.password ?? "");
+  const code = String(body?.registrationCode ?? "").trim();
+
+  if (!userId) return { ok: false, error: "Username is required." };
+  if (!email || !email.includes("@")) return { ok: false, error: "Valid email is required." };
+  if (!password) return { ok: false, error: "Password is required." };
+  if (REGISTRATION_CODE && !safeTokenEquals(code, REGISTRATION_CODE)) {
+    return { ok: false, error: "Invalid registration code." };
+  }
+  // Check if userId already taken
+  const existing = userRegistry.find(u => u.userId === userId);
+  if (existing) return { ok: false, error: "Username already taken. Choose another." };
+
+  const token = randomBytes(24).toString("hex");
+  const entry = { userId, token, createdAt: new Date().toISOString() };
+  userRegistry.push(entry);
+  await saveUserRegistry(userRegistry);
+
+  // Save BRAIN credentials
+  await saveBrainCredentials(userId, { email, password });
+
+  return { ok: true, userId, token };
+}
+
 function parseDashboardUsers(value) {
   const users = new Map();
   for (const rawEntry of String(value ?? "").split(/[\n,]+/)) {
@@ -1585,6 +1635,12 @@ function getAuthContext(req, url) {
   for (const [userId, config] of DASHBOARD_USERS.entries()) {
     if (safeTokenEquals(token, config.token)) {
       return { ok: true, userId, role: config.role ?? "user", authRequired: true };
+    }
+  }
+  // Check file-based user registry
+  for (const entry of userRegistry) {
+    if (safeTokenEquals(token, entry.token)) {
+      return { ok: true, userId: entry.userId, role: "user", authRequired: true };
     }
   }
   return { ok: false, userId: null, role: "anonymous", authRequired: true };
@@ -1902,12 +1958,171 @@ function sendHtml(res, statusCode, html) {
   res.end(html);
 }
 
+function setupHtml() {
+  const regCodeRequired = Boolean(REGISTRATION_CODE);
+  return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>QuantBrain — Setup</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif;
+  background: #f5f5f7;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  -webkit-font-smoothing: antialiased;
+}
+.card {
+  background: #fff;
+  border-radius: 18px;
+  padding: 40px 44px;
+  width: 100%;
+  max-width: 420px;
+  box-shadow: 0 4px 24px rgba(0,0,0,0.08);
+}
+.logo {
+  width: 44px; height: 44px;
+  background: #1d1d1f;
+  border-radius: 12px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 18px; font-weight: 800; color: #fff;
+  margin: 0 auto 20px;
+}
+h1 { font-size: 22px; font-weight: 700; text-align: center; color: #1d1d1f; margin-bottom: 6px; }
+.sub { font-size: 14px; color: #86868b; text-align: center; margin-bottom: 32px; }
+.field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px; }
+label { font-size: 13px; font-weight: 500; color: #3a3a3c; }
+input {
+  padding: 11px 14px;
+  border: 1px solid #d2d2d7;
+  border-radius: 10px;
+  font-size: 14px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+input:focus { border-color: #007aff; box-shadow: 0 0 0 3px rgba(0,122,255,0.12); }
+.divider { height: 1px; background: #f2f2f7; margin: 20px 0; }
+.section-label { font-size: 11px; font-weight: 600; color: #86868b; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 14px; }
+.btn {
+  width: 100%; padding: 13px;
+  background: #1d1d1f; color: #fff;
+  border: none; border-radius: 12px;
+  font-size: 15px; font-weight: 600;
+  cursor: pointer; margin-top: 8px;
+  transition: opacity 0.15s;
+}
+.btn:hover { opacity: 0.85; }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.status { font-size: 13px; margin-top: 14px; text-align: center; min-height: 18px; }
+.status.error { color: #ff3b30; }
+.status.success { color: #34c759; }
+.login-link { text-align: center; margin-top: 20px; font-size: 13px; color: #86868b; }
+.login-link a { color: #007aff; text-decoration: none; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">Q</div>
+  <h1>Welcome to QuantBrain</h1>
+  <p class="sub">Create your account to start mining alphas</p>
+
+  <div class="section-label">Your Account</div>
+  <div class="field"><label>Username</label><input id="userId" placeholder="e.g. alice" autocomplete="username"></div>
+  ${regCodeRequired ? '<div class="field"><label>Registration Code</label><input id="regCode" type="password" placeholder="Ask your admin for the code"></div>' : ''}
+
+  <div class="divider"></div>
+  <div class="section-label">WorldQuant BRAIN Credentials</div>
+  <div class="field"><label>BRAIN Email</label><input id="email" type="email" placeholder="your@email.com" autocomplete="email"></div>
+  <div class="field"><label>BRAIN Password</label><input id="password" type="password" placeholder="••••••••" autocomplete="current-password"></div>
+
+  <button class="btn" id="registerBtn">Create Account &amp; Enter</button>
+  <div class="status" id="status"></div>
+  <div class="login-link">Already have an account? <a href="#" id="switchToLogin">Sign in</a></div>
+
+  <div id="loginSection" style="display:none">
+    <div class="divider"></div>
+    <div class="section-label">Sign In</div>
+    <div class="field"><label>Username</label><input id="loginUserId" placeholder="Your username" autocomplete="username"></div>
+    <div class="field"><label>Token</label><input id="loginToken" type="password" placeholder="Paste your token" autocomplete="current-password"></div>
+    <button class="btn" id="loginBtn" style="background:#007aff">Sign In</button>
+    <div class="status" id="loginStatus"></div>
+    <div class="login-link"><a href="#" id="switchToRegister">← Create new account</a></div>
+  </div>
+</div>
+<script>
+(function(){
+  const reg = document.getElementById('registerBtn');
+  const st = document.getElementById('status');
+
+  reg.addEventListener('click', async function() {
+    st.className = 'status'; st.textContent = '';
+    const userId = document.getElementById('userId').value.trim();
+    const email = document.getElementById('email').value.trim();
+    const password = document.getElementById('password').value;
+    const regCode = document.getElementById('regCode')?.value ?? '';
+    if (!userId || !email || !password) { st.className='status error'; st.textContent='All fields are required.'; return; }
+    reg.disabled = true; reg.textContent = 'Creating account…';
+    try {
+      const r = await fetch('/account/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId, email, password, registrationCode: regCode })
+      });
+      const d = await r.json();
+      if (!d.ok) { st.className='status error'; st.textContent = d.error ?? 'Registration failed.'; reg.disabled=false; reg.textContent='Create Account & Enter'; return; }
+      localStorage.setItem('qb_token', d.token);
+      localStorage.setItem('qb_user', d.userId);
+      st.className='status success'; st.textContent = 'Account created! Entering dashboard…';
+      setTimeout(() => location.href = '/', 800);
+    } catch(e) { st.className='status error'; st.textContent='Network error: ' + e.message; reg.disabled=false; reg.textContent='Create Account & Enter'; }
+  });
+
+  document.getElementById('switchToLogin').addEventListener('click', function(e) {
+    e.preventDefault();
+    document.getElementById('loginSection').style.display = '';
+    document.querySelector('.card > *:not(#loginSection)');
+  });
+  document.getElementById('switchToRegister').addEventListener('click', function(e) {
+    e.preventDefault();
+    document.getElementById('loginSection').style.display = 'none';
+  });
+
+  document.getElementById('loginBtn').addEventListener('click', async function() {
+    const st2 = document.getElementById('loginStatus');
+    const token = document.getElementById('loginToken').value.trim();
+    const userId = document.getElementById('loginUserId').value.trim();
+    if (!token) { st2.className='status error'; st2.textContent='Token is required.'; return; }
+    this.disabled = true; this.textContent = 'Signing in…';
+    try {
+      const r = await fetch('/account', { headers: { 'Authorization': 'Bearer ' + token } });
+      if (r.ok) {
+        localStorage.setItem('qb_token', token);
+        if (userId) localStorage.setItem('qb_user', userId);
+        location.href = '/';
+      } else {
+        st2.className='status error'; st2.textContent='Invalid token.';
+        this.disabled=false; this.textContent='Sign In';
+      }
+    } catch(e) { st2.className='status error'; st2.textContent='Network error.'; this.disabled=false; this.textContent='Sign In'; }
+  });
+})();
+</script>
+</body>
+</html>`;
+}
+
 function dashboardHtml() {
   return `<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
 <meta name="dashboard-token" content="${process.env.ADMIN_TOKEN ?? process.env.DASHBOARD_TOKEN ?? ''}">
+<meta name="registration-code-required" content="${REGISTRATION_CODE ? 'true' : 'false'}">
 <title>QuantBrain Dashboard v3</title>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -2399,10 +2614,31 @@ body {
 </body>
 <script>
 (function(){
-  const token = document.querySelector('meta[name=dashboard-token]').content;
-  const h = token
-    ? { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' }
-    : { 'Content-Type': 'application/json' };
+  // Prefer localStorage token (registered users), fall back to server-injected admin token
+  const adminToken = document.querySelector('meta[name=dashboard-token]').content;
+  const storedToken = localStorage.getItem('qb_token') ?? '';
+  const token = storedToken || adminToken;
+
+  // If no token at all, redirect to setup
+  if (!token) { location.href = '/setup'; return; }
+
+  const h = { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' };
+
+  // Verify token is valid on load; redirect to setup if 401
+  fetch('/account', { headers: h }).then(r => {
+    if (r.status === 401) { localStorage.removeItem('qb_token'); location.href = '/setup'; }
+  }).catch(() => {});
+
+  // Show username in nav if available
+  const userName = localStorage.getItem('qb_user');
+  const navRight = document.querySelector('.nav-right');
+  if (navRight && userName) {
+    const userBadge = document.createElement('div');
+    userBadge.style.cssText = 'font-size:13px;color:#3a3a3c;font-weight:500;margin-right:12px;display:flex;align-items:center;gap:6px';
+    userBadge.innerHTML = '<span style="width:24px;height:24px;background:#007aff;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;color:#fff;font-size:11px;font-weight:700">' +
+      (userName[0] ?? '?').toUpperCase() + '</span>' + userName;
+    navRight.insertBefore(userBadge, navRight.firstChild);
+  }
 
   function esc(s) {
     return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
