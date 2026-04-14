@@ -2165,30 +2165,30 @@ input:focus { border-color: #007aff; box-shadow: 0 0 0 3px rgba(0,122,255,0.12);
 <body>
 <div class="card">
   <div class="logo">Q</div>
-  <h1>Welcome to QuantBrain</h1>
-  <p class="sub">Create your account to start mining alphas</p>
+  <h1>欢迎使用 QuantBrain</h1>
+  <p class="sub">创建账户以开始挖掘因子</p>
 
-  <div class="section-label">Your Account</div>
-  <div class="field"><label>Username</label><input id="userId" placeholder="e.g. alice" autocomplete="username"></div>
-  ${regCodeRequired ? '<div class="field"><label>Registration Code</label><input id="regCode" type="password" placeholder="Ask your admin for the code"></div>' : ''}
+  <div class="section-label">您的账户</div>
+  <div class="field"><label>用户名</label><input id="userId" placeholder="例如 alice" autocomplete="username"></div>
+  ${regCodeRequired ? '<div class="field"><label>注册码</label><input id="regCode" type="password" placeholder="请向管理员索取注册码"></div>' : ''}
 
   <div class="divider"></div>
-  <div class="section-label">WorldQuant BRAIN Credentials</div>
-  <div class="field"><label>BRAIN Email</label><input id="email" type="email" placeholder="your@email.com" autocomplete="email"></div>
-  <div class="field"><label>BRAIN Password</label><input id="password" type="password" placeholder="••••••••" autocomplete="current-password"></div>
+  <div class="section-label">WorldQuant BRAIN 凭据</div>
+  <div class="field"><label>BRAIN 邮箱</label><input id="email" type="email" placeholder="your@email.com" autocomplete="email"></div>
+  <div class="field"><label>BRAIN 密码</label><input id="password" type="password" placeholder="••••••••" autocomplete="current-password"></div>
 
-  <button class="btn" id="registerBtn">Create Account &amp; Enter</button>
+  <button class="btn" id="registerBtn">创建账户并进入</button>
   <div class="status" id="status"></div>
-  <div class="login-link">Already have an account? <a href="#" id="switchToLogin">Sign in</a></div>
+  <div class="login-link">已有账户？<a href="#" id="switchToLogin">登录</a></div>
 
   <div id="loginSection" style="display:none">
     <div class="divider"></div>
-    <div class="section-label">Sign In</div>
-    <div class="field"><label>Username</label><input id="loginUserId" placeholder="Your username" autocomplete="username"></div>
-    <div class="field"><label>Token</label><input id="loginToken" type="password" placeholder="Paste your token" autocomplete="current-password"></div>
-    <button class="btn" id="loginBtn" style="background:#007aff">Sign In</button>
+    <div class="section-label">登录</div>
+    <div class="field"><label>用户名</label><input id="loginUserId" placeholder="您的用户名" autocomplete="username"></div>
+    <div class="field"><label>令牌</label><input id="loginToken" type="password" placeholder="粘贴您的令牌" autocomplete="current-password"></div>
+    <button class="btn" id="loginBtn" style="background:#007aff">登录</button>
     <div class="status" id="loginStatus"></div>
-    <div class="login-link"><a href="#" id="switchToRegister">← Create new account</a></div>
+    <div class="login-link"><a href="#" id="switchToRegister">← 创建新账户</a></div>
   </div>
 </div>
 <script>
@@ -2202,8 +2202,8 @@ input:focus { border-color: #007aff; box-shadow: 0 0 0 3px rgba(0,122,255,0.12);
     const email = document.getElementById('email').value.trim();
     const password = document.getElementById('password').value;
     const regCode = document.getElementById('regCode')?.value ?? '';
-    if (!userId || !email || !password) { st.className='status error'; st.textContent='All fields are required.'; return; }
-    reg.disabled = true; reg.textContent = 'Creating account…';
+    if (!userId || !email || !password) { st.className='status error'; st.textContent='所有字段均为必填项。'; return; }
+    reg.disabled = true; reg.textContent = '创建中…';
     try {
       const r = await fetch('/account/register', {
         method: 'POST',
@@ -2211,12 +2211,12 @@ input:focus { border-color: #007aff; box-shadow: 0 0 0 3px rgba(0,122,255,0.12);
         body: JSON.stringify({ userId, email, password, registrationCode: regCode })
       });
       const d = await r.json();
-      if (!d.ok) { st.className='status error'; st.textContent = d.error ?? 'Registration failed.'; reg.disabled=false; reg.textContent='Create Account & Enter'; return; }
+      if (!d.ok) { st.className='status error'; st.textContent = d.error ?? '注册失败。'; reg.disabled=false; reg.textContent='创建账户并进入'; return; }
       localStorage.setItem('qb_token', d.token);
       localStorage.setItem('qb_user', d.userId);
-      st.className='status success'; st.textContent = 'Account created! Entering dashboard…';
+      st.className='status success'; st.textContent = '账户已创建！正在进入仪表盘…';
       setTimeout(() => location.href = '/', 800);
-    } catch(e) { st.className='status error'; st.textContent='Network error: ' + e.message; reg.disabled=false; reg.textContent='Create Account & Enter'; }
+    } catch(e) { st.className='status error'; st.textContent='网络错误：' + e.message; reg.disabled=false; reg.textContent='创建账户并进入'; }
   });
 
   document.getElementById('switchToLogin').addEventListener('click', function(e) {
@@ -2233,8 +2233,8 @@ input:focus { border-color: #007aff; box-shadow: 0 0 0 3px rgba(0,122,255,0.12);
     const st2 = document.getElementById('loginStatus');
     const token = document.getElementById('loginToken').value.trim();
     const userId = document.getElementById('loginUserId').value.trim();
-    if (!token) { st2.className='status error'; st2.textContent='Token is required.'; return; }
-    this.disabled = true; this.textContent = 'Signing in…';
+    if (!token) { st2.className='status error'; st2.textContent='令牌为必填项。'; return; }
+    this.disabled = true; this.textContent = '登录中…';
     try {
       const r = await fetch('/account', { headers: { 'Authorization': 'Bearer ' + token } });
       if (r.ok) {
@@ -2242,10 +2242,10 @@ input:focus { border-color: #007aff; box-shadow: 0 0 0 3px rgba(0,122,255,0.12);
         if (userId) localStorage.setItem('qb_user', userId);
         location.href = '/';
       } else {
-        st2.className='status error'; st2.textContent='Invalid token.';
-        this.disabled=false; this.textContent='Sign In';
+        st2.className='status error'; st2.textContent='令牌无效。';
+        this.disabled=false; this.textContent='登录';
       }
-    } catch(e) { st2.className='status error'; st2.textContent='Network error.'; this.disabled=false; this.textContent='Sign In'; }
+    } catch(e) { st2.className='status error'; st2.textContent='网络错误。'; this.disabled=false; this.textContent='登录'; }
   });
 })();
 </script>
@@ -2440,17 +2440,17 @@ body{display:flex}
     <span class="sb-name">QuantBrain</span>
   </div>
   <nav class="sb-nav">
-    <div class="sb-item active" data-tab="overview"><span class="sb-icon">⬡</span>Overview</div>
-    <div class="sb-item" data-tab="pipeline"><span class="sb-icon">◈</span>Pipeline</div>
-    <div class="sb-item" data-tab="alphas"><span class="sb-icon">◆</span>Alphas</div>
-    <div class="sb-item" data-tab="knowledge"><span class="sb-icon">◎</span>Knowledge</div>
-    <div class="sb-item" data-tab="runs"><span class="sb-icon">≡</span>Runs</div>
-    <div class="sb-item" data-tab="settings"><span class="sb-icon">⚙</span>Settings</div>
+    <div class="sb-item active" data-tab="overview"><span class="sb-icon">⬡</span>总览</div>
+    <div class="sb-item" data-tab="pipeline"><span class="sb-icon">◈</span>流水线</div>
+    <div class="sb-item" data-tab="alphas"><span class="sb-icon">◆</span>因子</div>
+    <div class="sb-item" data-tab="knowledge"><span class="sb-icon">◎</span>知识库</div>
+    <div class="sb-item" data-tab="runs"><span class="sb-icon">≡</span>运行记录</div>
+    <div class="sb-item" data-tab="settings"><span class="sb-icon">⚙</span>设置</div>
   </nav>
   <div class="sb-bottom">
     <div class="sb-user" id="sb-user">
       <div class="sb-avatar" id="sb-av">?</div>
-      <span id="sb-uname" style="font-size:12px;color:var(--t3)">Guest</span>
+      <span id="sb-uname" style="font-size:12px;color:var(--t3)">访客</span>
     </div>
   </div>
 </div>
@@ -2458,11 +2458,11 @@ body{display:flex}
 <!-- Main -->
 <div class="main">
   <div class="topbar">
-    <span class="tb-title" id="topbar-title">Overview</span>
+    <span class="tb-title" id="topbar-title">总览</span>
     <div class="tb-right">
       <div class="status-pill" id="sched-status">
         <div class="pulse"></div>
-        <span id="sched-label">Loading…</span>
+        <span id="sched-label">加载中…</span>
       </div>
       <div class="status-pill" style="font-family:'JetBrains Mono',monospace;font-size:12px" id="topbar-cd">–:––</div>
     </div>
@@ -2474,105 +2474,105 @@ body{display:flex}
     <!-- Mining Status Banner -->
     <div class="mining-banner idle-mining" id="mining-banner">
       <div class="mining-indicator idle-ind" id="mining-ind"></div>
-      <span class="mining-label idle-lbl" id="mining-label">SYSTEM IDLE</span>
+      <span class="mining-label idle-lbl" id="mining-label">系统空闲</span>
       <div class="mining-sep"></div>
-      <span class="mining-task" id="mining-task">No active mining runs</span>
+      <span class="mining-task" id="mining-task">当前无挖掘任务</span>
       <span class="mining-elapsed" id="mining-elapsed"></span>
     </div>
 
     <div class="kpi-row">
-      <div class="kpi"><div class="kpi-label">Submitted Today</div><div class="kpi-val" id="k-submitted">–</div><div class="kpi-sub up" id="k-sub1"></div></div>
-      <div class="kpi"><div class="kpi-label">Gate Pass Rate</div><div class="kpi-val" id="k-gatepass">–</div><div class="kpi-sub" id="k-sub2">recent runs</div></div>
-      <div class="kpi"><div class="kpi-label">Repair Queue</div><div class="kpi-val" id="k-repair">–</div><div class="kpi-sub" id="k-sub3"></div></div>
-      <div class="kpi"><div class="kpi-label">Daily Spend</div><div class="kpi-val" id="k-spend">–</div><div class="kpi-sub" id="k-sub4">of $3.60 limit</div></div>
+      <div class="kpi"><div class="kpi-label">今日提交</div><div class="kpi-val" id="k-submitted">–</div><div class="kpi-sub up" id="k-sub1"></div></div>
+      <div class="kpi"><div class="kpi-label">闸门通过率</div><div class="kpi-val" id="k-gatepass">–</div><div class="kpi-sub" id="k-sub2">近期运行</div></div>
+      <div class="kpi"><div class="kpi-label">修复队列</div><div class="kpi-val" id="k-repair">–</div><div class="kpi-sub" id="k-sub3"></div></div>
+      <div class="kpi"><div class="kpi-label">今日花费</div><div class="kpi-val" id="k-spend">–</div><div class="kpi-sub" id="k-sub4">上限 $3.60</div></div>
     </div>
     <div class="grid3">
       <div class="box">
-        <div class="box-title">Alpha Pipeline — Now</div>
+        <div class="box-title">Alpha 流水线 — 实时</div>
         <div class="stages">
           <div class="stage">
             <div class="stage-n c-blue" id="ps-gen">–</div>
-            <div class="stage-l">Gen</div>
+            <div class="stage-l">生成</div>
             <div class="stage-full">Generate</div>
             <div class="stage-tip">
-              <div class="tip-title">Generate</div>
+              <div class="tip-title">生成</div>
               <div class="tip-body">LLM 根据研究方向生成新的因子表达式。每轮生成多条候选 Alpha。</div>
             </div>
           </div>
           <div class="stage">
             <div class="stage-n c-amber" id="ps-val">–</div>
-            <div class="stage-l">Valid</div>
+            <div class="stage-l">验证</div>
             <div class="stage-full">Validate</div>
             <div class="stage-tip">
-              <div class="tip-title">Validate</div>
+              <div class="tip-title">验证</div>
               <div class="tip-body">语法检查 + 基本逻辑过滤。不合格的表达式在此阶段被剔除，节省仿真资源。</div>
             </div>
           </div>
           <div class="stage">
             <div class="stage-n c-purple" id="ps-sim">–</div>
-            <div class="stage-l">Sim</div>
+            <div class="stage-l">仿真</div>
             <div class="stage-full">Simulate</div>
             <div class="stage-tip">
-              <div class="tip-title">Simulate</div>
+              <div class="tip-title">仿真</div>
               <div class="tip-body">提交至 WorldQuant BRAIN 进行历史回测。计算 Sharpe、Fitness 等绩效指标。</div>
             </div>
           </div>
           <div class="stage">
             <div class="stage-n c-red" id="ps-gate">–</div>
-            <div class="stage-l">Gate</div>
+            <div class="stage-l">闸门</div>
             <div class="stage-full">Gate Check</div>
             <div class="stage-tip">
-              <div class="tip-title">Gate Check</div>
-              <div class="tip-body">用 Sharpe 比率、Fitness 阈值过滤因子。只有通过 Gate 的 Alpha 才会被提交。</div>
+              <div class="tip-title">闸门检查</div>
+              <div class="tip-body">用 Sharpe 比率、Fitness 阈值过滤因子。只有通过闸门的 Alpha 才会被提交。</div>
             </div>
           </div>
           <div class="stage">
             <div class="stage-n c-green" id="ps-sub">–</div>
-            <div class="stage-l">Sub</div>
+            <div class="stage-l">提交</div>
             <div class="stage-full">Submit</div>
             <div class="stage-tip">
-              <div class="tip-title">Submit</div>
-              <div class="tip-body">通过 Gate 的因子提交至 WorldQuant 生产池，等待人工评审与最终录用。</div>
+              <div class="tip-title">提交</div>
+              <div class="tip-body">通过闸门的因子提交至 WorldQuant 生产池，等待人工评审与最终录用。</div>
             </div>
           </div>
         </div>
         <!-- Current task strip -->
         <div class="current-task-strip" id="current-task-strip">
           <div class="ct-dot idle" id="ct-dot"></div>
-          <span class="ct-label">Task</span>
-          <span class="ct-text" id="ct-text">Idle</span>
+          <span class="ct-label">任务</span>
+          <span class="ct-text" id="ct-text">空闲</span>
         </div>
       </div>
       <div class="box">
-        <div class="box-title">LLM Router</div>
+        <div class="box-title">LLM 路由器</div>
         <div class="llm-list" id="llm-list">
-          <div style="font-size:12px;color:var(--t3)">Loading…</div>
+          <div style="font-size:12px;color:var(--t3)">加载中…</div>
         </div>
       </div>
       <div class="box">
         <div class="cd-wrap">
-          <div class="cd-label">Next Run In</div>
+          <div class="cd-label">距下次运行</div>
           <div class="cd-time" id="cd-time">–:––</div>
           <div class="cd-sub" id="cd-sub">–</div>
         </div>
         <div class="div"></div>
-        <div class="box-title">Research Idea</div>
-        <textarea class="idea-field" id="idea-field" placeholder="Describe your alpha idea in plain language…"></textarea>
-        <button class="run-btn" id="run-btn">Optimize &amp; Run</button>
+        <div class="box-title">研究想法</div>
+        <textarea class="idea-field" id="idea-field" placeholder="用自然语言描述你的因子想法…"></textarea>
+        <button class="run-btn" id="run-btn">优化并运行</button>
         <div class="run-status" id="run-status"></div>
       </div>
     </div>
     <div class="grid2">
       <div class="box">
-        <div class="box-title">Repair Queue</div>
+        <div class="box-title">修复队列</div>
         <div class="queue-list" id="repair-list">
-          <div style="font-size:12px;color:var(--t3)">Loading…</div>
+          <div style="font-size:12px;color:var(--t3)">加载中…</div>
         </div>
       </div>
       <div class="box">
-        <div class="box-title">Recent Activity</div>
+        <div class="box-title">近期活动</div>
         <div class="act-list" id="act-list">
-          <div style="font-size:12px;color:var(--t3)">Loading…</div>
+          <div style="font-size:12px;color:var(--t3)">加载中…</div>
         </div>
       </div>
     </div>
@@ -2581,11 +2581,11 @@ body{display:flex}
   <!-- Pipeline -->
   <div class="panel" id="panel-pipeline">
     <div class="box" style="margin-bottom:16px">
-      <div class="box-title">Active Runs</div>
-      <div id="pipeline-active" style="font-size:12px;color:var(--t3)">No active runs</div>
+      <div class="box-title">活跃运行</div>
+      <div id="pipeline-active" style="font-size:12px;color:var(--t3)">无活跃运行</div>
     </div>
     <div class="box">
-      <div class="box-title">Progress Log</div>
+      <div class="box-title">进度日志</div>
       <div id="pipeline-log" style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--t2);background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:12px;max-height:400px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;line-height:1.6"></div>
     </div>
   </div>
@@ -2595,20 +2595,20 @@ body{display:flex}
     <div class="box" style="margin-bottom:16px">
       <div class="box-title" style="margin-bottom:16px">Alpha 因子状态汇总</div>
       <div class="alpha-status-row">
-        <div class="alpha-chip"><div class="alpha-chip-val c-blue" id="as-gen">–</div><div class="alpha-chip-label">Generated</div></div>
-        <div class="alpha-chip"><div class="alpha-chip-val c-amber" id="as-sim">–</div><div class="alpha-chip-label">Simulated</div></div>
-        <div class="alpha-chip"><div class="alpha-chip-val c-green" id="as-pass">–</div><div class="alpha-chip-label">Passed Gate</div></div>
-        <div class="alpha-chip"><div class="alpha-chip-val c-red" id="as-fail">–</div><div class="alpha-chip-label">Failed Gate</div></div>
-        <div class="alpha-chip"><div class="alpha-chip-val c-green" id="as-sub">–</div><div class="alpha-chip-label">Submitted</div></div>
-        <div class="alpha-chip"><div class="alpha-chip-val c-amber" id="as-rep">–</div><div class="alpha-chip-label">In Repair</div></div>
+        <div class="alpha-chip"><div class="alpha-chip-val c-blue" id="as-gen">–</div><div class="alpha-chip-label">已生成</div></div>
+        <div class="alpha-chip"><div class="alpha-chip-val c-amber" id="as-sim">–</div><div class="alpha-chip-label">已仿真</div></div>
+        <div class="alpha-chip"><div class="alpha-chip-val c-green" id="as-pass">–</div><div class="alpha-chip-label">通过闸门</div></div>
+        <div class="alpha-chip"><div class="alpha-chip-val c-red" id="as-fail">–</div><div class="alpha-chip-label">未通过</div></div>
+        <div class="alpha-chip"><div class="alpha-chip-val c-green" id="as-sub">–</div><div class="alpha-chip-label">已提交</div></div>
+        <div class="alpha-chip"><div class="alpha-chip-val c-amber" id="as-rep">–</div><div class="alpha-chip-label">修复中</div></div>
       </div>
     </div>
     <div class="box">
-      <div class="box-title">Submitted Alphas</div>
+      <div class="box-title">已提交因子</div>
       <div id="alphas-wrap" style="overflow-x:auto">
         <table class="data-table">
-          <thead><tr><th>Alpha ID / Expression</th><th>Gate</th><th>Sharpe IS</th><th>Fitness</th><th>Engine</th><th>Time</th></tr></thead>
-          <tbody id="alphas-body"><tr><td colspan="6" style="color:var(--t3);font-family:inherit">Loading…</td></tr></tbody>
+          <thead><tr><th>Alpha ID / 表达式</th><th>状态</th><th>IS Sharpe</th><th>适应度</th><th>引擎</th><th>时间</th></tr></thead>
+          <tbody id="alphas-body"><tr><td colspan="6" style="color:var(--t3);font-family:inherit">加载中…</td></tr></tbody>
         </table>
       </div>
     </div>
@@ -2617,32 +2617,32 @@ body{display:flex}
   <!-- Knowledge -->
   <div class="panel" id="panel-knowledge">
     <div class="box" style="margin-bottom:16px">
-      <div class="box-title">LLM Router — All Providers</div>
-      <div id="knowledge-llm"><div style="font-size:12px;color:var(--t3)">Loading…</div></div>
+      <div class="box-title">LLM 路由器 — 全部提供商</div>
+      <div id="knowledge-llm"><div style="font-size:12px;color:var(--t3)">加载中…</div></div>
     </div>
     <div class="box">
-      <div class="box-title">Budget Breakdown</div>
+      <div class="box-title">预算明细</div>
       <div id="knowledge-budget" style="display:flex;gap:32px">
-        <div><div style="font-size:10px;color:var(--t3);margin-bottom:6px;text-transform:uppercase;letter-spacing:.06em">Spent Today</div><div style="font-size:28px;font-weight:700;font-family:'JetBrains Mono',monospace" id="kb-spent">$–</div></div>
-        <div><div style="font-size:10px;color:var(--t3);margin-bottom:6px;text-transform:uppercase;letter-spacing:.06em">Daily Limit</div><div style="font-size:28px;font-weight:700;font-family:'JetBrains Mono',monospace" id="kb-limit">$3.60</div></div>
-        <div><div style="font-size:10px;color:var(--t3);margin-bottom:6px;text-transform:uppercase;letter-spacing:.06em">Remaining</div><div style="font-size:28px;font-weight:700;font-family:'JetBrains Mono',monospace;color:var(--green)" id="kb-rem">$–</div></div>
+        <div><div style="font-size:10px;color:var(--t3);margin-bottom:6px;text-transform:uppercase;letter-spacing:.06em">今日花费</div><div style="font-size:28px;font-weight:700;font-family:'JetBrains Mono',monospace" id="kb-spent">$–</div></div>
+        <div><div style="font-size:10px;color:var(--t3);margin-bottom:6px;text-transform:uppercase;letter-spacing:.06em">日限额</div><div style="font-size:28px;font-weight:700;font-family:'JetBrains Mono',monospace" id="kb-limit">$3.60</div></div>
+        <div><div style="font-size:10px;color:var(--t3);margin-bottom:6px;text-transform:uppercase;letter-spacing:.06em">剩余</div><div style="font-size:28px;font-weight:700;font-family:'JetBrains Mono',monospace;color:var(--green)" id="kb-rem">$–</div></div>
       </div>
     </div>
     <div class="box">
-      <div class="box-title">Objective Evolution</div>
-      <div style="font-size:11px;color:var(--t3);margin-bottom:10px">Auto-generated mining objectives — each run explores a different category &amp; field</div>
-      <div id="obj-history"><div style="font-size:12px;color:var(--t3)">Loading…</div></div>
+      <div class="box-title">目标演化</div>
+      <div style="font-size:11px;color:var(--t3);margin-bottom:10px">每次运行自动生成不同类别与字段的挖掘目标</div>
+      <div id="obj-history"><div style="font-size:12px;color:var(--t3)">加载中…</div></div>
     </div>
   </div>
 
   <!-- Runs -->
   <div class="panel" id="panel-runs">
     <div class="box">
-      <div class="box-title">Recent Runs</div>
+      <div class="box-title">近期运行</div>
       <div id="runs-wrap" style="overflow-x:auto">
         <table class="data-table">
-          <thead><tr><th>Run ID</th><th>Status</th><th>Engine</th><th>Submitted</th><th>Best Sharpe</th><th>Started</th></tr></thead>
-          <tbody id="runs-body"><tr><td colspan="6" style="color:var(--t3);font-family:inherit">Loading…</td></tr></tbody>
+          <thead><tr><th>运行ID</th><th>状态</th><th>引擎</th><th>合格数</th><th>最佳Sharpe</th><th>开始时间</th></tr></thead>
+          <tbody id="runs-body"><tr><td colspan="6" style="color:var(--t3);font-family:inherit">加载中…</td></tr></tbody>
         </table>
       </div>
     </div>
@@ -2651,14 +2651,14 @@ body{display:flex}
   <!-- Settings -->
   <div class="panel" id="panel-settings" style="max-width:520px">
     <div class="box">
-      <div class="box-title" style="margin-bottom:20px">Scheduler Settings</div>
-      <div class="form-row"><div class="form-label">Enabled</div><select class="form-select" id="s-enabled"><option value="true">Yes</option><option value="false">No</option></select></div>
-      <div class="form-row"><div class="form-label">Mode</div><select class="form-select" id="s-mode"><option value="evaluate">evaluate</option><option value="loop">loop</option><option value="generate">generate</option></select></div>
-      <div class="form-row"><div class="form-label">Interval (minutes) <span style="font-weight:400;color:var(--t3);font-size:10px">— run-finished always chains in 1 min regardless</span></div><input class="form-input" id="s-interval" type="number" min="1"></div>
-      <div class="form-row"><div class="form-label">Batch Size</div><input class="form-input" id="s-batch" type="number" min="1"></div>
-      <div class="form-row"><div class="form-label">Rounds</div><input class="form-input" id="s-rounds" type="number" min="1"></div>
-      <div class="form-row"><div class="form-label">Objective</div><input class="form-input" id="s-objective" type="text"></div>
-      <button class="save-btn" id="s-save">Save Settings</button>
+      <div class="box-title" style="margin-bottom:20px">调度器设置</div>
+      <div class="form-row"><div class="form-label">启用</div><select class="form-select" id="s-enabled"><option value="true">是</option><option value="false">否</option></select></div>
+      <div class="form-row"><div class="form-label">模式</div><select class="form-select" id="s-mode"><option value="evaluate">evaluate</option><option value="loop">loop</option><option value="generate">generate</option></select></div>
+      <div class="form-row"><div class="form-label">间隔（分钟）<span style="font-weight:400;color:var(--t3);font-size:10px">— 运行结束后固定等待1分钟继续</span></div><input class="form-input" id="s-interval" type="number" min="1"></div>
+      <div class="form-row"><div class="form-label">批次大小</div><input class="form-input" id="s-batch" type="number" min="1"></div>
+      <div class="form-row"><div class="form-label">轮数</div><input class="form-input" id="s-rounds" type="number" min="1"></div>
+      <div class="form-row"><div class="form-label">挖掘目标</div><input class="form-input" id="s-objective" type="text"></div>
+      <button class="save-btn" id="s-save">保存设置</button>
       <div style="font-size:12px;color:var(--t3);margin-top:10px;min-height:16px" id="s-status"></div>
     </div>
   </div>
@@ -2687,7 +2687,7 @@ body{display:flex}
   function $(id) { return document.getElementById(id); }
 
   // Nav tabs
-  const TITLES = { overview:'Overview', pipeline:'Pipeline', alphas:'Alphas', knowledge:'Knowledge', runs:'Runs', settings:'Settings' };
+  const TITLES = { overview:'总览', pipeline:'流水线', alphas:'因子', knowledge:'知识库', runs:'运行记录', settings:'设置' };
   document.querySelectorAll('.sb-item').forEach(function(el) {
     el.addEventListener('click', function() {
       document.querySelectorAll('.sb-item').forEach(function(x){ x.classList.remove('active'); });
@@ -2724,8 +2724,8 @@ body{display:flex}
       nextRunAt = d.nextRunAt || null;
       var sl = $('sched-label');
       var cs = $('cd-sub');
-      if (sl) sl.textContent = d.enabled ? (d.mode + ' \u00b7 ' + d.engine) : 'Scheduler off';
-      if (cs) cs.textContent = (d.mode || '') + ' \u00b7 ' + (d.engine || '') + ' \u00b7 batch ' + (d.batchSize || '\u2013');
+      if (sl) sl.textContent = d.enabled ? (d.mode + ' \u00b7 ' + d.engine) : '调度器已关闭';
+      if (cs) cs.textContent = (d.mode || '') + ' \u00b7 ' + (d.engine || '') + ' \u00b7 批次 ' + (d.batchSize || '\u2013');
     } catch(e) {}
   }
   fetchSched();
@@ -2744,7 +2744,7 @@ body{display:flex}
     if (activeRun) {
       if (banner) { banner.className = 'mining-banner active-mining'; }
       if (ind) { ind.className = 'mining-indicator active-ind'; }
-      if (lbl) { lbl.className = 'mining-label active-lbl'; lbl.textContent = 'MINING ACTIVE'; }
+      if (lbl) { lbl.className = 'mining-label active-lbl'; lbl.textContent = '挖掘中'; }
       var engine = activeRun.engine || 'legacy-js';
       var status = activeRun.status || 'running';
       var currentLlm = activeRun.currentLlm || activeRun.llmProvider || engine;
@@ -2756,18 +2756,18 @@ body{display:flex}
         var sec = Math.floor((Date.now() - new Date(activeRun.startedAt)) / 1000);
         var em = Math.floor(sec/60);
         var es = sec % 60;
-        elapsed.textContent = em + ':' + String(es).padStart(2,'0') + ' elapsed';
+        elapsed.textContent = em + ':' + String(es).padStart(2,'0') + ' 已运行';
       }
       if (ctDot) { ctDot.className = 'ct-dot running'; }
-      if (ctText) { ctText.textContent = taskStr || 'Running'; }
+      if (ctText) { ctText.textContent = taskStr || '运行中'; }
     } else {
       if (banner) { banner.className = 'mining-banner idle-mining'; }
       if (ind) { ind.className = 'mining-indicator idle-ind'; }
-      if (lbl) { lbl.className = 'mining-label idle-lbl'; lbl.textContent = 'SYSTEM IDLE'; }
-      if (task) task.textContent = 'No active mining runs';
+      if (lbl) { lbl.className = 'mining-label idle-lbl'; lbl.textContent = '系统空闲'; }
+      if (task) task.textContent = '当前无挖掘任务';
       if (elapsed) elapsed.textContent = '';
       if (ctDot) { ctDot.className = 'ct-dot idle'; }
-      if (ctText) { ctText.textContent = 'Idle'; }
+      if (ctText) { ctText.textContent = '空闲'; }
     }
   }
 
@@ -2799,7 +2799,7 @@ body{display:flex}
       var ksp = $('k-spend');
       if (ksp && lr) ksp.textContent = '$' + (lr.spent_usd ?? 0).toFixed(2);
       var ks4 = $('k-sub4');
-      if (ks4 && lr) ks4.textContent = 'of $' + (lr.daily_budget_usd ?? 3.6).toFixed(2) + ' limit';
+      if (ks4 && lr) ks4.textContent = '上限 $' + (lr.daily_budget_usd ?? 3.6).toFixed(2);
 
       // Pipeline stages — parse from active run logs
       // Note: [gate-pass]/[gate-fail] are never emitted; python-v2 stdout has no stage lines
@@ -2838,7 +2838,7 @@ body{display:flex}
         if (ctText2) ctText2.textContent = lastLogLine.length > 80 ? lastLogLine.slice(0,80) + '\u2026' : lastLogLine;
       } else {
         if (ctDot2) ctDot2.className = 'ct-dot idle';
-        if (ctText2) ctText2.textContent = 'Idle';
+        if (ctText2) ctText2.textContent = '空闲';
       }
 
       // LLM rows
@@ -2865,7 +2865,7 @@ body{display:flex}
         var q = (al.queue || []).slice(0,4);
         rl.innerHTML = q.length
           ? q.map(function(x){ return '<div class="queue-row"><div class="q-expr">' + esc(x.expression || '\u2013') + '</div><div class="q-tag">' + esc(x.reason || '\u2013') + '</div><div class="q-depth">' + esc(x.depth || '\u2013') + '</div></div>'; }).join('')
-          : '<div style="font-size:12px;color:var(--t3)">Queue empty</div>';
+          : '<div style="font-size:12px;color:var(--t3)">队列为空</div>';
       }
 
       // Activity
@@ -2878,7 +2878,7 @@ body{display:flex}
               var icon = e.type==='submitted'?'\u2191':e.type==='repair'?'\u27f3':'\u2715';
               return '<div class="act-row"><div class="act-dot ' + cls + '">' + icon + '</div><div style="flex:1;min-width:0"><div class="act-expr">' + esc(e.alphaId || e.expression || '\u2013') + '</div><div class="act-meta">' + esc(e.message || e.type || '') + '</div></div></div>';
             }).join('')
-          : '<div style="font-size:12px;color:var(--t3)">No recent activity</div>';
+          : '<div style="font-size:12px;color:var(--t3)">暂无近期活动</div>';
       }
 
       // Pipeline panel
@@ -2886,11 +2886,11 @@ body{display:flex}
       if (pa) {
         pa.innerHTML = active.length
           ? active.map(function(x){ return '<div style="background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:12px 14px;margin-bottom:8px"><div class="jb" style="font-size:12px;color:var(--t1)">' + esc(x.runId || '\u2013') + '</div><div style="font-size:11px;color:var(--t3);margin-top:4px">' + esc(x.status || '\u2013') + ' \u00b7 ' + esc(x.engine || '\u2013') + '</div></div>'; }).join('')
-          : '<div style="font-size:12px;color:var(--t3)">No active runs</div>';
+          : '<div style="font-size:12px;color:var(--t3)">无活跃运行</div>';
         var pl = $('pipeline-log');
         if (pl) {
           var logLines = runLogs.slice(-60).map(function(l){ return (l.at ? l.at.slice(11,19) : '') + ' ' + (l.line || ''); });
-          pl.textContent = logLines.join('\\n') || 'No progress data';
+          pl.textContent = logLines.join('\\n') || '暂无进度数据';
         }
       }
 
@@ -2941,7 +2941,7 @@ body{display:flex}
                 '<td>' + esc(sub.source || '\u2013') + '</td>' +
                 '<td>' + ts + '</td></tr>';
             }).join('')
-          : '<tr><td colspan="6" style="color:var(--t3);font-family:inherit">No submitted alphas yet</td></tr>';
+          : '<tr><td colspan="6" style="color:var(--t3);font-family:inherit">暂无已提交因子</td></tr>';
       }
 
       // Objective history (from scheduler.recentObjectives)
@@ -2967,22 +2967,22 @@ body{display:flex}
               '</div>';
           }).join('');
         } else {
-          oh.innerHTML = '<div style="font-size:12px;color:var(--t3)">No objectives generated yet — starts on next scheduled run</div>';
+          oh.innerHTML = '<div style="font-size:12px;color:var(--t3)">暂无生成目标，下次定时运行后开始</div>';
         }
       }
       // Show current objective in mining banner task line
       var curObj = sched.objective || '';
       if (curObj && !activeRun) {
         var taskEl = $('mining-task');
-        if (taskEl && taskEl.textContent === 'No active mining runs') {
-          taskEl.textContent = 'Next: ' + curObj.slice(0, 90) + (curObj.length > 90 ? '\u2026' : '');
+        if (taskEl && taskEl.textContent === '当前无挖掘任务') {
+          taskEl.textContent = '下一个：' + curObj.slice(0, 90) + (curObj.length > 90 ? '\u2026' : '');
         }
       }
 
       // Knowledge panel
       var kl = $('knowledge-llm');
       if (kl && lr && lr.providers) {
-        kl.innerHTML = '<table class="data-table"><thead><tr><th>Provider</th><th>Role</th><th>Win Rate</th><th>Calls</th><th>Wins</th></tr></thead><tbody>' +
+        kl.innerHTML = '<table class="data-table"><thead><tr><th>提供商</th><th>角色</th><th>胜率</th><th>调用</th><th>成功</th></tr></thead><tbody>' +
           Object.entries(lr.providers).map(function(kv) {
             var n = kv[0]; var p = kv[1];
             var wr = ((p.win_rate ?? 0.5)*100).toFixed(1);
@@ -3025,7 +3025,7 @@ body{display:flex}
             '<td>' + qualCount + '</td>' +
             '<td>' + (bestSharpe != null ? bestSharpe.toFixed(2) : '\u2013') + '</td>' +
             '<td>' + esc(startedAt ? new Date(startedAt).toLocaleTimeString() : '\u2013') + '</td></tr>';
-        }).join('') || '<tr><td colspan="6" style="color:var(--t3);font-family:inherit">No runs found</td></tr>';
+        }).join('') || '<tr><td colspan="6" style="color:var(--t3);font-family:inherit">暂无运行记录</td></tr>';
       }
 
     } catch(e) {}
@@ -3051,7 +3051,7 @@ body{display:flex}
   var saveBtn = $('s-save');
   if (saveBtn) saveBtn.addEventListener('click', async function() {
     var st = $('s-status');
-    this.disabled = true; this.textContent = 'Saving\u2026';
+    this.disabled = true; this.textContent = '保存中\u2026';
     try {
       var body = {
         enabled: $('s-enabled') ? $('s-enabled').value === 'true' : false,
@@ -3062,9 +3062,9 @@ body{display:flex}
         objective: $('s-objective') ? ($('s-objective').value || '').trim() : ''
       };
       var r = await fetch('/scheduler', { method:'POST', headers: h, body: JSON.stringify(body) });
-      if (st) st.textContent = r.ok ? 'Saved \u2713' : 'Error ' + r.status;
-    } catch(e) { if (st) st.textContent = 'Error: ' + e.message; }
-    this.disabled = false; this.textContent = 'Save Settings';
+      if (st) st.textContent = r.ok ? '已保存 \u2713' : '错误 ' + r.status;
+    } catch(e) { if (st) st.textContent = '错误：' + e.message; }
+    this.disabled = false; this.textContent = '保存设置';
     setTimeout(function(){ if (st) st.textContent = ''; }, 3000);
   });
 
@@ -3074,18 +3074,18 @@ body{display:flex}
   if (btn) btn.addEventListener('click', async function() {
     var ideaEl = $('idea-field');
     var idea = ideaEl ? ideaEl.value.trim() : '';
-    if (!idea) { if (runSt) runSt.textContent = 'Please enter an idea'; return; }
-    btn.disabled = true; btn.textContent = 'Optimizing\u2026'; if (runSt) runSt.textContent = '';
+    if (!idea) { if (runSt) runSt.textContent = '请输入想法'; return; }
+    btn.disabled = true; btn.textContent = '优化中\u2026'; if (runSt) runSt.textContent = '';
     try {
       var or = await fetch('/ideas/optimize', { method:'POST', headers: h, body: JSON.stringify({ idea: idea }) });
       var od = await or.json();
-      if (runSt) runSt.textContent = 'Direction: ' + esc(od.direction || od.target_family || '');
-      btn.textContent = 'Starting run\u2026';
+      if (runSt) runSt.textContent = '方向：' + esc(od.direction || od.target_family || '');
+      btn.textContent = '启动中\u2026';
       var rr = await fetch('/runs', { method:'POST', headers: h, body: JSON.stringify({ force: false }) });
-      if (rr.status === 409) { if (runSt) runSt.textContent = 'Run already active'; btn.disabled=false; btn.textContent='Optimize & Run'; return; }
-      btn.textContent = 'Run Started \u2713';
-      setTimeout(function(){ btn.disabled=false; btn.textContent='Optimize & Run'; }, 3000);
-    } catch(e) { if (runSt) runSt.textContent='Error: '+e.message; btn.disabled=false; btn.textContent='Optimize & Run'; }
+      if (rr.status === 409) { if (runSt) runSt.textContent = '已有运行在进行中'; btn.disabled=false; btn.textContent='优化并运行'; return; }
+      btn.textContent = '运行已启动 \u2713';
+      setTimeout(function(){ btn.disabled=false; btn.textContent='优化并运行'; }, 3000);
+    } catch(e) { if (runSt) runSt.textContent='错误：'+e.message; btn.disabled=false; btn.textContent='优化并运行'; }
   });
 })();
 </script>
