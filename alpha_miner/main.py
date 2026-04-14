@@ -233,8 +233,8 @@ def main() -> None:
         "validCandidates": len(valid_candidates),
         "qualified_alphas_count": len(portfolio_pool),
         "degraded_candidates_count": sum(1 for record in evaluated_records if record.get("status") == "no_daily_pnl"),
-        "total_llm_tokens": {"prompt": 0, "completion": 0},
-        "total_llm_cost_usd": 0.0,
+        "total_llm_tokens": _router_token_totals(router),
+        "total_llm_cost_usd": round(router.spent_usd, 6) if router is not None else 0.0,
         "total_brain_simulations": len(evaluated_records),
         "total_runtime_seconds": round(time.time() - started, 4),
         "rejected_by_stage": rejected_by_stage,
@@ -274,6 +274,14 @@ def main() -> None:
             pass
     append_jsonl(progress_path, {"stage": "finished", "summary": summary})
     print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
+
+
+def _router_token_totals(router) -> dict[str, int]:
+    if router is None:
+        return {"prompt": 0, "completion": 0}
+    prompt_total = sum(p.total_tokens_in for p in router._providers.values())
+    completion_total = sum(p.total_tokens_out for p in router._providers.values())
+    return {"prompt": prompt_total, "completion": completion_total}
 
 
 def phase0_mode(mode: str) -> str:

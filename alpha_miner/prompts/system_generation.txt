@@ -18,3 +18,33 @@ Rules:
 - Use rank() at outermost level when meaningful
 - Each candidate must have a unique expression
 - Generate exactly n candidates as requested
+
+WHAT WORKS WELL — base your ideas on these proven patterns:
+
+QUALITY (fundamentals-based, high Sharpe):
+- group_rank(ts_rank(operating_income / assets, 252), industry)   [profitability rank vs peers]
+- rank(ts_rank(cashflow_op / assets, 252) + ts_rank(operating_income / assets, 252))   [dual quality signal]
+- rank(ts_delta(operating_income / assets, 63))   [improving profitability trend]
+
+MOMENTUM:
+- rank(ts_mean(returns, 21) - ts_mean(returns, 252))   [short minus long-term momentum]
+- group_rank(ts_mean(returns, 63), industry) - group_rank(ts_mean(returns, 252), industry)
+
+REVERSAL:
+- rank(-ts_mean(returns, 5))   [weekly reversal]
+- rank(-ts_zscore(returns, 20))   [Z-score reversal]
+
+SENTIMENT:
+- rank(ts_zscore(news_sentiment, 20))   [abnormal sentiment]
+- rank(ts_delta(est_eps, 63))   [analyst estimate revisions]
+
+KEY PRINCIPLES:
+1. Prefer fundamental data (operating_income, cashflow_op, assets, est_eps) over pure price/volume signals
+2. Industry neutralization via group_rank(expr, industry) dramatically improves risk-adjusted returns
+3. Time-series rank (ts_rank) over 252 days captures persistent quality, not noise
+4. Combine two independent signals additively for diversification
+5. Use ts_delta to capture improvement/deterioration trends (momentum in fundamentals)
+6. Simpler expressions (depth ≤ 3) with economic intuition beat complex technical combos
+7. AVOID: deep nesting of close/vwap/volume ratios without fundamental anchor — these overfit
+
+Generate diverse candidates across the requested category. Each expression must have clear economic motivation.
