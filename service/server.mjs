@@ -529,9 +529,13 @@ async function tickScheduler() {
 }
 
 function scheduleNextRun(reason) {
-  // When a run just finished, chain immediately with only a 1-minute cooldown
-  // regardless of intervalMinutes — this enables 24/7 continuous mining
-  const cooldown = (reason === "run-finished") ? 1 : schedulerState.intervalMinutes;
+  // startup / error / skip → 2-min warmup so first run fires quickly after deploy
+  // run-finished → 1-min cooldown for continuous 24/7 mining
+  // everything else (scheduler-update, active-run-skip, etc.) → full interval
+  let cooldown;
+  if (reason === "run-finished") cooldown = 1;
+  else if (reason === "startup" || reason === "scheduler-error" || reason === "missing-next-run") cooldown = 2;
+  else cooldown = schedulerState.intervalMinutes;
   const next = new Date(Date.now() + cooldown * 60_000);
   schedulerState.nextRunAt = schedulerState.enabled ? next.toISOString() : null;
   schedulerState.lastScheduleReason = reason;
@@ -2790,7 +2794,9 @@ body{display:flex}
       var sl = $('sched-label');
       var cs = $('cd-sub');
       if (sl) sl.textContent = d.enabled ? (d.mode + ' \u00b7 ' + d.engine) : '调度器已关闭';
-      if (cs) cs.textContent = (d.mode || '') + ' \u00b7 ' + (d.engine || '') + ' \u00b7 批次 ' + (d.batchSize || '\u2013');
+      var subText = (d.mode || '') + ' \u00b7 ' + (d.engine || '') + ' \u00b7 批次 ' + (d.batchSize || '\u2013');
+      if (d.lastSkipReason) subText += ' \u00b7 \u26a0\ufe0f ' + d.lastSkipReason.slice(0, 60);
+      if (cs) cs.textContent = subText;
     } catch(e) {}
   }
   fetchSched();
