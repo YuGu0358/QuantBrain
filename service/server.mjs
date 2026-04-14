@@ -2603,12 +2603,13 @@ body{display:flex}
       if (banner) { banner.className = 'mining-banner active-mining'; }
       if (ind) { ind.className = 'mining-indicator active-ind'; }
       if (lbl) { lbl.className = 'mining-label active-lbl'; lbl.textContent = 'MINING ACTIVE'; }
-      var engine = activeRun.engine || '';
+      var engine = activeRun.engine || 'legacy-js';
       var status = activeRun.status || 'running';
-      var currentLlm = activeRun.currentLlm || activeRun.llmProvider || '';
-      var currentTaskName = activeRun.currentTask || activeRun.phase || status;
-      var taskStr = (currentLlm ? currentLlm + ' \u00b7 ' : '') + currentTaskName;
-      if (task) task.textContent = taskStr || ('Engine: ' + engine);
+      var currentLlm = activeRun.currentLlm || activeRun.llmProvider || engine;
+      var logs = (activeRun.logs || []);
+      var latestLog = logs.length ? (logs[logs.length-1].line || '') : '';
+      var taskStr = latestLog ? latestLog.slice(0,90) : (currentLlm + ' \u00b7 ' + status);
+      if (task) task.textContent = taskStr;
       if (elapsed && activeRun.startedAt) {
         var sec = Math.floor((Date.now() - new Date(activeRun.startedAt)) / 1000);
         var em = Math.floor(sec/60);
@@ -2654,14 +2655,34 @@ body{display:flex}
       var ks4 = $('k-sub4');
       if (ks4 && lr) ks4.textContent = 'of $' + (lr.daily_budget_usd ?? 3.6).toFixed(2) + ' limit';
 
-      // Pipeline stages from active run
+      // Pipeline stages — parse from active run logs
       var activeRun = active[0] || null;
-      var prog = (activeRun && activeRun.stageCounts) ? activeRun.stageCounts : {};
-      var stageMap = { gen: prog.generated ?? prog.gen, val: prog.validated ?? prog.val, sim: prog.simulated ?? prog.sim, gate: prog.gated ?? prog.gate, sub: prog.submitted ?? prog.sub };
-      Object.keys(stageMap).forEach(function(s) {
-        var el = $(('ps-' + s));
-        if (el) el.textContent = stageMap[s] != null ? stageMap[s] : '0';
+      var runLogs = (activeRun && activeRun.logs) ? activeRun.logs : [];
+      var nGen = 0, nSim = 0, nVal = 0, nGate = 0, nSub = 0;
+      var lastLogLine = '';
+      runLogs.forEach(function(l) {
+        var line = l.line || '';
+        if (line) lastLogLine = line;
+        if (line.indexOf('[submit]') === 0) nGen++;
+        else if (line.indexOf('[simulation]') === 0) nSim++;
+        else if (line.indexOf('[complete]') === 0) nVal++;
+        else if (line.indexOf('[gate-pass]') === 0 || line.indexOf('[passed]') === 0) { nGate++; nSub++; }
+        else if (line.indexOf('[gate-fail]') === 0 || line.indexOf('[failed]') === 0) nGate++;
       });
+      var stageMap = { gen: nGen, val: nVal, sim: nSim, gate: nGate, sub: nSub };
+      Object.keys(stageMap).forEach(function(s) {
+        var el = $('ps-' + s);
+        if (el) el.textContent = stageMap[s];
+      });
+      // Update current task strip with latest log line
+      var ctDot2 = $('ct-dot'); var ctText2 = $('ct-text');
+      if (activeRun && lastLogLine) {
+        if (ctDot2) ctDot2.className = 'ct-dot running';
+        if (ctText2) ctText2.textContent = lastLogLine.length > 80 ? lastLogLine.slice(0,80) + '\u2026' : lastLogLine;
+      } else {
+        if (ctDot2) ctDot2.className = 'ct-dot idle';
+        if (ctText2) ctText2.textContent = 'Idle';
+      }
 
       // LLM rows
       var ll = $('llm-list');
@@ -2711,8 +2732,8 @@ body{display:flex}
           : '<div style="font-size:12px;color:var(--t3)">No active runs</div>';
         var pl = $('pipeline-log');
         if (pl) {
-          var progArr = (recent[0] && recent[0].progressTail) ? recent[0].progressTail : [];
-          pl.textContent = progArr.map(function(l){ return l.msg || JSON.stringify(l); }).join('\\n') || 'No progress data';
+          var logLines = runLogs.slice(-60).map(function(l){ return (l.at ? l.at.slice(11,19) : '') + ' ' + (l.line || ''); });
+          pl.textContent = logLines.join('\\n') || 'No progress data';
         }
       }
 
