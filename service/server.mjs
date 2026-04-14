@@ -2922,10 +2922,21 @@ body{display:flex}
       // LLM rows
       var ll = $('llm-list');
       if (ll && lr && lr.providers) {
-        var entries = Object.entries(lr.providers).slice(0, 5);
+        // Flatten nested {name:{role:{...provider}}} into flat list
+        var flatProviders = [];
+        Object.entries(lr.providers).forEach(function(kv) {
+          var n = kv[0]; var roleMap = kv[1];
+          if (roleMap && typeof roleMap === 'object' && !('win_rate' in roleMap)) {
+            // nested: {role: providerObj}
+            Object.values(roleMap).forEach(function(p) { flatProviders.push(Object.assign({}, p, {name: n})); });
+          } else {
+            flatProviders.push(Object.assign({}, roleMap, {name: n}));
+          }
+        });
+        var entries5 = flatProviders.slice(0, 5);
         var activeLlm = activeRun ? (activeRun.currentLlm || activeRun.llmProvider || '') : '';
-        ll.innerHTML = entries.map(function(kv) {
-          var n = kv[0]; var p = kv[1];
+        ll.innerHTML = entries5.map(function(p) {
+          var n = p.name || '';
           var wr = ((p.win_rate ?? 0.5) * 100).toFixed(0);
           var col = (p.win_rate ?? 0.5) >= 0.5 ? 'var(--green)' : 'var(--amber)';
           var activeBadge = (activeLlm && n.toLowerCase().indexOf(activeLlm.toLowerCase()) >= 0) ? '<span class="llm-active-badge">ACTIVE</span>' : '';
@@ -3060,12 +3071,21 @@ body{display:flex}
       // Knowledge panel
       var kl = $('knowledge-llm');
       if (kl && lr && lr.providers) {
+        // Flatten nested {name:{role:{...provider}}} into flat list
+        var allProviders = [];
+        Object.entries(lr.providers).forEach(function(kv) {
+          var n = kv[0]; var roleMap = kv[1];
+          if (roleMap && typeof roleMap === 'object' && !('win_rate' in roleMap)) {
+            Object.values(roleMap).forEach(function(p) { allProviders.push(Object.assign({}, p, {name: n})); });
+          } else {
+            allProviders.push(Object.assign({}, roleMap, {name: n}));
+          }
+        });
         kl.innerHTML = '<table class="data-table"><thead><tr><th>提供商</th><th>角色</th><th>胜率</th><th>调用</th><th>成功</th></tr></thead><tbody>' +
-          Object.entries(lr.providers).map(function(kv) {
-            var n = kv[0]; var p = kv[1];
-            var wr = ((p.win_rate ?? 0.5)*100).toFixed(1);
-            var col = (p.win_rate ?? 0.5) >= 0.5 ? 'var(--green)' : 'var(--amber)';
-            return '<tr><td style="color:var(--t1);font-weight:500">' + esc(n) + '</td><td>' + esc(p.role || '\u2013') + '</td><td style="color:' + col + ';font-weight:600">' + wr + '%</td><td>' + (p.calls || 0) + '</td><td>' + (p.wins || 0) + '</td></tr>';
+          allProviders.map(function(p) {
+            var wr = ((p.win_rate ?? 0)*100).toFixed(1);
+            var col = (p.win_rate ?? 0) >= 0.5 ? 'var(--green)' : 'var(--amber)';
+            return '<tr><td style="color:var(--t1);font-weight:500">' + esc(p.name || '\u2013') + '</td><td>' + esc(p.role || '\u2013') + '</td><td style="color:' + col + ';font-weight:600">' + wr + '%</td><td>' + (p.calls || 0) + '</td><td>' + (p.wins || 0) + '</td></tr>';
           }).join('') + '</tbody></table>';
         var sp = lr.spent_usd ?? 0;
         var bud = lr.daily_budget_usd ?? 3.6;
