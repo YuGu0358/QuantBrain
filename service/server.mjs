@@ -227,7 +227,7 @@ const server = createServer(async (req, res) => {
       if (typeof body.objective === "string" && body.objective.trim()) {
         schedulerState.objective = body.objective.trim();
       }
-      if (Number.isFinite(Number(body.intervalMinutes)) && Number(body.intervalMinutes) >= 15) {
+      if (Number.isFinite(Number(body.intervalMinutes)) && Number(body.intervalMinutes) >= 1) {
         schedulerState.intervalMinutes = Number(body.intervalMinutes);
       }
       if (Number.isFinite(Number(body.rounds)) && Number(body.rounds) >= 1) {
@@ -412,7 +412,10 @@ async function tickScheduler() {
 }
 
 function scheduleNextRun(reason) {
-  const next = new Date(Date.now() + schedulerState.intervalMinutes * 60_000);
+  // When a run just finished, chain immediately with only a 1-minute cooldown
+  // regardless of intervalMinutes — this enables 24/7 continuous mining
+  const cooldown = (reason === "run-finished") ? 1 : schedulerState.intervalMinutes;
+  const next = new Date(Date.now() + cooldown * 60_000);
   schedulerState.nextRunAt = schedulerState.enabled ? next.toISOString() : null;
   schedulerState.lastScheduleReason = reason;
 }
@@ -2528,7 +2531,7 @@ body{display:flex}
       <div class="box-title" style="margin-bottom:20px">Scheduler Settings</div>
       <div class="form-row"><div class="form-label">Enabled</div><select class="form-select" id="s-enabled"><option value="true">Yes</option><option value="false">No</option></select></div>
       <div class="form-row"><div class="form-label">Mode</div><select class="form-select" id="s-mode"><option value="evaluate">evaluate</option><option value="loop">loop</option><option value="generate">generate</option></select></div>
-      <div class="form-row"><div class="form-label">Interval (minutes)</div><input class="form-input" id="s-interval" type="number" min="15"></div>
+      <div class="form-row"><div class="form-label">Interval (minutes) <span style="font-weight:400;color:var(--t3);font-size:10px">— run-finished always chains in 1 min regardless</span></div><input class="form-input" id="s-interval" type="number" min="1"></div>
       <div class="form-row"><div class="form-label">Batch Size</div><input class="form-input" id="s-batch" type="number" min="1"></div>
       <div class="form-row"><div class="form-label">Rounds</div><input class="form-input" id="s-rounds" type="number" min="1"></div>
       <div class="form-row"><div class="form-label">Objective</div><input class="form-input" id="s-objective" type="text"></div>
