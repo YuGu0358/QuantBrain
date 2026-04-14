@@ -63,6 +63,20 @@ const ALPHA_EXPERIMENTAL_FIELDS = process.env.ALPHA_EXPERIMENTAL_FIELDS === "tru
 const ALPHA_CROWDING_PATTERN_THRESHOLD = clampInt(process.env.ALPHA_CROWDING_PATTERN_THRESHOLD, 2, 1, 20);
 const ALPHA_FAMILY_COOLDOWN_ROUNDS = clampInt(process.env.ALPHA_FAMILY_COOLDOWN_ROUNDS, 3, 1, 20);
 
+// Dynamic objective: category → relevant BRAIN fields
+const CATEGORY_FIELDS = {
+  QUALITY:        ["operating_income", "cashflow_op", "assets", "est_eps", "returns"],
+  MOMENTUM:       ["returns", "close", "vwap", "volume", "adv20"],
+  REVERSAL:       ["returns", "close", "open", "high", "low", "vwap"],
+  VOLATILITY:     ["returns", "high", "low", "close", "adv20", "volume"],
+  LIQUIDITY:      ["volume", "adv20", "vwap", "close", "returns"],
+  MICROSTRUCTURE: ["volume", "adv20", "high", "low", "open", "close", "vwap"],
+  SENTIMENT:      ["news_sentiment", "est_eps", "returns", "volume", "operating_income"],
+};
+const OBJECTIVE_HISTORY_PATH = path.join(RUNS_DIR, "objective-history.json");
+// Loaded after RUNS_DIR is created; max 200 entries kept
+let objectiveHistory = [];
+
 const activeRuns = new Map();
 const schedulerState = {
   enabled: process.env.AUTO_RUN_ENABLED === "true",
@@ -84,6 +98,7 @@ await mkdir(IDEAS_DIR, { recursive: true });
 await mkdir(CREDENTIALS_DIR, { recursive: true });
 const userRegistry = await loadUserRegistry();
 let autoLoopState = await loadAutoLoopState();
+objectiveHistory = (await maybeReadJson(OBJECTIVE_HISTORY_PATH)) ?? [];
 scheduleNextRun("startup");
 
 const server = createServer(async (req, res) => {
@@ -210,6 +225,10 @@ const server = createServer(async (req, res) => {
 
     if (req.method === "GET" && url.pathname === "/scheduler") {
       return sendJson(res, 200, publicSchedulerState());
+    }
+
+    if (req.method === "GET" && url.pathname === "/scheduler/objective-history") {
+      return sendJson(res, 200, { history: objectiveHistory.slice(-50).reverse() });
     }
 
     if (req.method === "GET" && url.pathname === "/auto-loop") {
@@ -381,6 +400,100 @@ async function createRun(input, source, authContext = systemAuthContext()) {
   return state;
 }
 
+// Returns {category, field} choosing least-recently-used category first,
+// then a random field from that category's field list.
+function pickNextTarget() {
+  const categories = Object.keys(CATEGORY_FIELDS);
+  // Count recent uses per category (last 20 entries)
+  const recent = objectiveHistory.slice(-20);
+  const counts = {};
+  for (const cat of categories) counts[cat] = 0;
+  for (const entry of recent) {
+    if (entry.category && counts[entry.category] !== undefined) counts[entry.category]++;
+  }
+  // Sort ascending by count; ties broken by shuffle
+  const sorted = categories.slice().sort((a, b) => counts[a] - counts[b]);
+  // Pick the least used; if tied, pick randomly among tied
+  const minCount = counts[sorted[0]];
+  const tied = sorted.filter(c => counts[c] === minCount);
+  const category = tied[Math.floor(Math.random() * tied.length)];
+  const fields = CATEGORY_FIELDS[category];
+  // Avoid repeating the last-used field for this category
+  const lastField = objectiveHistory.slice().reverse().find(e => e.category === category)?.field;
+  const available = fields.filter(f => f !== lastField);
+  const fieldPool = available.length ? available : fields;
+  const field = fieldPool[Math.floor(Math.random() * fieldPool.length)];
+  return { category, field };
+}
+
+// Save persistent objective history file (fire-and-forget)
+function saveObjectiveHistory() {
+  const trimmed = objectiveHistory.slice(-200);
+  objectiveHistory = trimmed;
+  writeFile(OBJECTIVE_HISTORY_PATH, JSON.stringify(trimmed, null, 2)).catch(() => {});
+}
+
+// Generate a specific, creative mining objective using GPT-4o-mini.
+// Falls back to a template string if OpenAI is unavailable.
+async function generateScheduledObjective() {
+  const { category, field } = pickNextTarget();
+  const recentObjectives = objectiveHistory.slice(-5).map(e => e.objective).join("; ");
+
+  let objective;
+  if (process.env.OPENAI_API_KEY) {
+    try {
+      const systemPrompt =
+        "You are a WorldQuant BRAIN quantitative researcher. Generate a concise, specific alpha mining objective (1-2 sentences) for the given category and data field. " +
+        "The objective should suggest a testable hypothesis about return predictability. " +
+        "Avoid repeating recent objectives. Return ONLY the objective string, no JSON, no commentary.";
+      const userPrompt =
+        `Category: ${category}\nPrimary field: ${field}\n` +
+        (recentObjectives ? `Recent objectives to avoid repeating: ${recentObjectives}\n` : "") +
+        "Write a specific mining objective for this category and field.";
+
+      const resp = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: OPENAI_OPTIMIZE_MODEL,
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: userPrompt },
+          ],
+          max_tokens: 120,
+          temperature: 0.9,
+        }),
+      });
+      const payload = await resp.json().catch(() => null);
+      const content = payload?.choices?.[0]?.message?.content?.trim();
+      if (content) objective = content;
+    } catch (_) {}
+  }
+
+  // Fallback template when OpenAI is unavailable
+  if (!objective) {
+    const templates = {
+      QUALITY:        `Discover robust ${field}-based quality signals with low crowding and positive out-of-sample stability`,
+      MOMENTUM:       `Identify short-to-medium horizon momentum patterns using ${field} with sector neutralization`,
+      REVERSAL:       `Mine mean-reversion alphas from ${field} anomalies with low turnover and high Sharpe`,
+      VOLATILITY:     `Explore volatility-adjusted ${field} signals that predict cross-sectional return dispersion`,
+      LIQUIDITY:      `Find ${field}-driven liquidity premium signals with stable risk-adjusted returns`,
+      MICROSTRUCTURE: `Discover intraday microstructure patterns in ${field} that predict next-day returns`,
+      SENTIMENT:      `Extract sentiment-driven mispricings using ${field} with earnings surprise confirmation`,
+    };
+    objective = templates[category] ?? `Discover robust ${category.toLowerCase()} alphas using ${field}`;
+  }
+
+  // Record to history
+  objectiveHistory.push({ at: new Date().toISOString(), category, field, objective });
+  saveObjectiveHistory();
+
+  return objective;
+}
+
 async function tickScheduler() {
   schedulerState.lastTickAt = new Date().toISOString();
   if (!schedulerState.enabled) return;
@@ -392,12 +505,16 @@ async function tickScheduler() {
     return;
   }
 
+  // Generate a fresh, evolving objective for each scheduled run
+  const dynamicObjective = await generateScheduledObjective();
+  schedulerState.objective = dynamicObjective;
+
   const state = await createRun(
     {
       runId: `scheduled-mining-${new Date().toISOString().replaceAll(":", "-").replace(/\.\d{3}Z$/, "Z")}`,
       mode: schedulerState.mode,
       engine: schedulerState.engine,
-      objective: schedulerState.objective,
+      objective: dynamicObjective,
       rounds: schedulerState.rounds,
       batchSize: schedulerState.batchSize,
       concurrency: schedulerState.concurrency,
@@ -1566,6 +1683,7 @@ function publicSchedulerState() {
     experimentalFieldsEnabled: ALPHA_EXPERIMENTAL_FIELDS,
     crowdingPatternThreshold: ALPHA_CROWDING_PATTERN_THRESHOLD,
     familyCooldownRounds: ALPHA_FAMILY_COOLDOWN_ROUNDS,
+    recentObjectives: objectiveHistory.slice(-10).reverse(),
   };
 }
 
@@ -2510,6 +2628,11 @@ body{display:flex}
         <div><div style="font-size:10px;color:var(--t3);margin-bottom:6px;text-transform:uppercase;letter-spacing:.06em">Remaining</div><div style="font-size:28px;font-weight:700;font-family:'JetBrains Mono',monospace;color:var(--green)" id="kb-rem">$–</div></div>
       </div>
     </div>
+    <div class="box">
+      <div class="box-title">Objective Evolution</div>
+      <div style="font-size:11px;color:var(--t3);margin-bottom:10px">Auto-generated mining objectives — each run explores a different category &amp; field</div>
+      <div id="obj-history"><div style="font-size:12px;color:var(--t3)">Loading…</div></div>
+    </div>
   </div>
 
   <!-- Runs -->
@@ -2787,6 +2910,41 @@ body{display:flex}
               return '<tr><td style="color:var(--t1)">' + esc((x.runId||'').slice(0,14)) + '</td><td><span class="badge ' + gateCls + '">' + gateText + '</span></td><td>' + (sum.bestSharpe != null ? sum.bestSharpe.toFixed(3) : '\u2013') + '</td><td>' + (sum.fitness != null ? sum.fitness.toFixed(2) : '\u2013') + '</td><td>' + esc(s.engine || '\u2013') + '</td><td>' + esc(s.startedAt ? new Date(s.startedAt).toLocaleTimeString() : '\u2013') + '</td></tr>';
             }).join('')
           : '<tr><td colspan="6" style="color:var(--t3);font-family:inherit">No submitted alphas yet</td></tr>';
+      }
+
+      // Objective history (from scheduler.recentObjectives)
+      var sched = d.scheduler || {};
+      var objHistory = sched.recentObjectives || [];
+      var oh = $('obj-history');
+      if (oh) {
+        if (objHistory.length) {
+          var catColors = {
+            QUALITY:'#34d399',MOMENTUM:'#60a5fa',REVERSAL:'#f472b6',
+            VOLATILITY:'#fbbf24',LIQUIDITY:'#a78bfa',MICROSTRUCTURE:'#fb923c',SENTIMENT:'#38bdf8'
+          };
+          oh.innerHTML = objHistory.slice(0,10).map(function(e) {
+            var col = catColors[e.category] || 'var(--t2)';
+            var ts = e.at ? new Date(e.at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : '';
+            return '<div style="padding:10px 0;border-bottom:1px solid var(--border)">' +
+              '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">' +
+              '<span style="font-size:10px;font-weight:700;color:' + col + ';text-transform:uppercase;letter-spacing:.08em;background:' + col + '22;padding:2px 8px;border-radius:4px">' + esc(e.category||'') + '</span>' +
+              '<span style="font-size:10px;color:var(--t3);font-family:\'JetBrains Mono\',monospace">' + esc(e.field||'') + '</span>' +
+              '<span style="font-size:10px;color:var(--t3);margin-left:auto">' + ts + '</span>' +
+              '</div>' +
+              '<div style="font-size:12px;color:var(--t2);line-height:1.5">' + esc(e.objective||'') + '</div>' +
+              '</div>';
+          }).join('');
+        } else {
+          oh.innerHTML = '<div style="font-size:12px;color:var(--t3)">No objectives generated yet — starts on next scheduled run</div>';
+        }
+      }
+      // Show current objective in mining banner task line
+      var curObj = sched.objective || '';
+      if (curObj && !activeRun) {
+        var taskEl = $('mining-task');
+        if (taskEl && taskEl.textContent === 'No active mining runs') {
+          taskEl.textContent = 'Next: ' + curObj.slice(0, 90) + (curObj.length > 90 ? '\u2026' : '');
+        }
       }
 
       // Knowledge panel
