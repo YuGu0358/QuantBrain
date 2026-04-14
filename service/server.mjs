@@ -2712,7 +2712,7 @@ body{display:flex}
         var pl = $('pipeline-log');
         if (pl) {
           var progArr = (recent[0] && recent[0].progressTail) ? recent[0].progressTail : [];
-          pl.textContent = progArr.map(function(l){ return l.msg || JSON.stringify(l); }).join('\n') || 'No progress data';
+          pl.textContent = progArr.map(function(l){ return l.msg || JSON.stringify(l); }).join('\\n') || 'No progress data';
         }
       }
 
