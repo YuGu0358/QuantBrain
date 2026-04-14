@@ -255,7 +255,8 @@ def phase0_mode(mode: str) -> str:
     # Use absolute path so it resolves correctly regardless of CWD (Railway, local, etc.)
     report = Path(__file__).parent.parent / "docs" / "phase0_brain_probe_report.md"
     if not report.exists():
-        return "phase0_brain_probe_report_missing"
+        # Default to degraded mode when report is missing (e.g., Railway deploy without docs/)
+        return "regular_tier_degraded_no_daily_pnl"
     text = report.read_text(encoding="utf-8")
     if "- Decision: Case A" in text or "- Decision: Case B" in text:
         return "daily_pnl_available"

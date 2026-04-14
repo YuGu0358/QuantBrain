@@ -9,6 +9,7 @@ RUN apt-get update \
 COPY package.json ./
 COPY alpha_miner ./alpha_miner
 COPY service ./service
+COPY docs ./docs
 
 RUN python3 -m pip install --break-system-packages --no-cache-dir -r alpha_miner/requirements.txt
 
