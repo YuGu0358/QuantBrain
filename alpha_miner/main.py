@@ -273,6 +273,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rounds", type=int, default=1)
     parser.add_argument("--category", default=None)
     parser.add_argument("--config", default=None)
+    parser.add_argument("--concurrency", type=int, default=1)
     parser.add_argument("--resume-from", default=None)
     parser.add_argument("--repair-context", default=None)
     parser.add_argument("--use-llm", action="store_true")
