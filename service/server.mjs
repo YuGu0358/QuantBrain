@@ -1357,36 +1357,66 @@ async function loadRunScoredCandidates(outputDir) {
 function normalizePythonV2Candidate(record) {
   const bt = record.backtest ?? {};
   const cand = record.candidate ?? {};
-  const dsr = record.dsr ?? 0;
   const ortho = record.orthogonality ?? {};
   const checks = [];
-  // Synthesize BRAIN-style check results from python-v2 metrics
-  if (typeof dsr === "number" && dsr < 0.95) {
-    checks.push({ name: "DSR", result: "FAIL", value: dsr, limit: 0.95 });
-  } else if (typeof dsr === "number") {
-    checks.push({ name: "DSR", result: "PASS", value: dsr, limit: 0.95 });
-  }
-  if (ortho.passed === false) {
-    checks.push({ name: "ORTHOGONALITY", result: "FAIL", value: ortho.correlation ?? null, limit: 0.5 });
-  } else if (ortho.passed === true) {
-    checks.push({ name: "ORTHOGONALITY", result: "PASS", value: ortho.correlation ?? null, limit: 0.5 });
-  }
   const sharpe = bt.sharpe ?? null;
+  const fitness = bt.fitness ?? null;
+  const turnover = bt.turnover ?? null;
+
+  // Case A/B: daily PnL available — use DSR as primary quality gate
+  if (record.dsr != null) {
+    const dsr = Number(record.dsr);
+    if (dsr < 0.95) {
+      checks.push({ name: "DSR", result: "FAIL", value: dsr, limit: 0.95 });
+    } else {
+      checks.push({ name: "DSR", result: "PASS", value: dsr, limit: 0.95 });
+    }
+    if (ortho.passed === false) {
+      checks.push({ name: "ORTHOGONALITY", result: "FAIL", value: ortho.correlation ?? null, limit: 0.5 });
+    } else if (ortho.passed === true) {
+      checks.push({ name: "ORTHOGONALITY", result: "PASS", value: ortho.correlation ?? null, limit: 0.5 });
+    }
+  } else if (record.status === "no_daily_pnl") {
+    // Case C (degraded): no daily PnL — use BRAIN aggregate metrics as gate proxy
+    // SHARPE check: IS Sharpe > 1.0 required for submission viability
+    if (sharpe != null) {
+      checks.push({ name: "SHARPE", result: sharpe >= 1.0 ? "PASS" : "FAIL", value: sharpe, limit: 1.0 });
+    }
+    // FITNESS check: fitness > 1.0 signals meaningful alpha
+    if (fitness != null) {
+      checks.push({ name: "FITNESS", result: fitness >= 1.0 ? "PASS" : "FAIL", value: fitness, limit: 1.0 });
+    }
+    // TURNOVER check: must be in BRAIN's acceptable range
+    if (turnover != null) {
+      const turnoverOk = turnover >= 0.01 && turnover <= 0.7;
+      checks.push({ name: "TURNOVER", result: turnoverOk ? "PASS" : "FAIL", value: turnover, limit: 0.7 });
+    }
+    // Brain orthogonality check result if available
+    const bc = record.brainCheckOrthogonality ?? {};
+    if (bc.passed === false) {
+      checks.push({ name: "SELF_CORRELATION", result: "FAIL", value: bc.max_abs_correlation ?? null, limit: 0.7 });
+    } else if (bc.passed === true) {
+      checks.push({ name: "SELF_CORRELATION", result: "PASS", value: bc.max_abs_correlation ?? null, limit: 0.7 });
+    }
+  }
+
+  const dsr = record.dsr ?? null;
   return {
     alphaId: bt.alpha_id,
     expression: cand.expression ?? null,
     stage: "IS",
-    totalScore: dsr || sharpe || 0,
+    totalScore: (dsr != null ? dsr : (sharpe ?? 0)),
     checks,
     metrics: {
       isSharpe: sharpe,
-      testSharpe: sharpe,   // IS sharpe used as proxy
-      fitness: bt.fitness ?? null,
-      turnover: bt.turnover ?? null,
+      testSharpe: sharpe,
+      fitness,
+      turnover,
       netSharpe: bt.net_sharpe ?? null,
     },
     _engine: "python-v2",
     _category: cand.category ?? null,
+    _degraded: record.status === "no_daily_pnl",
   };
 }
 

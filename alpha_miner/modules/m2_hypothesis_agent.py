@@ -226,45 +226,71 @@ class HypothesisAgent:
         return raw, ti, to, latency
 
     def _deterministic_candidates(self, objective: str, category: str, n: int) -> list[Candidate]:
-        templates = _templates_for_category(category)
+        # Collect templates from target category first, then others to ensure uniqueness
+        primary = _templates_for_category(category)
+        all_templates: list[tuple[str, str, str]] = [(expr, hyp, category) for expr, hyp in primary]
+        for cat, pairs in _ALL_TEMPLATES.items():
+            if cat != category:
+                for expr, hyp in pairs:
+                    all_templates.append((expr, hyp, cat))
+        seen: set[str] = set()
         candidates = []
-        for index in range(n):
-            expression, hypothesis = templates[index % len(templates)]
+        for expr, hyp, cat in all_templates:
+            if expr in seen:
+                continue
+            seen.add(expr)
             candidates.append(
                 Candidate(
-                    id=f"{category.lower()}_{index:03d}",
-                    category=category,
-                    hypothesis=f"{hypothesis} Objective: {objective}",
-                    expression=expression,
+                    id=f"{cat.lower()}_{len(candidates):03d}",
+                    category=cat,
+                    hypothesis=f"{hyp} Objective: {objective}",
+                    expression=expr,
                     origin_refs=["taxonomy", "wq101_negative_examples"],
                 )
             )
+            if len(candidates) >= n:
+                break
         return candidates
 
 
+_ALL_TEMPLATES: dict[str, list[tuple[str, str]]] = {
+    "QUALITY": [
+        ("group_rank(ts_rank(operating_income / assets, 252), industry)", "Peer-relative profitability rank within industry."),
+        ("rank(ts_rank(cashflow_op / assets, 252) + ts_rank(operating_income / assets, 252))", "Dual quality: cash-flow-backed operating income rank."),
+        ("group_rank(rank(cashflow_op / assets) - rank(ts_mean(cashflow_op / assets, 60)), industry)", "Improving cash generation vs trailing average, industry-neutral."),
+        ("rank(ts_delta(operating_income / assets, 63))", "Quarterly improvement in asset profitability as momentum signal."),
+    ],
+    "MOMENTUM": [
+        ("rank(ts_mean(returns, 21) - ts_mean(returns, 252))", "Short-term momentum minus long-term drift."),
+        ("group_rank(ts_mean(returns, 63), industry) - group_rank(ts_mean(returns, 252), industry)", "Industry-relative medium vs long momentum spread."),
+        ("rank(ts_corr(rank(returns), rank(volume), 60))", "Correlation of return rank and volume rank over 60 days."),
+    ],
+    "REVERSAL": [
+        ("rank(-ts_mean(returns, 5))", "Short-term weekly return reversal."),
+        ("rank(ts_delta(volume, 20)) * rank(-returns)", "Volume spike with price reversal signal."),
+        ("rank(-ts_zscore(returns, 20))", "Z-score reversal: extreme moves revert over 20 days."),
+    ],
+    "LIQUIDITY": [
+        ("rank(ts_mean(adv20, 60) / adv20)", "Relative liquidity trend: improving availability."),
+        ("group_rank(-ts_std_dev(volume / adv20, 20), industry)", "Stable volume relative to peers signals lower friction."),
+    ],
+    "VOLATILITY": [
+        ("rank(-ts_std_dev(returns, 60))", "Low-volatility premium over 60-day window."),
+        ("rank(-ts_std_dev(returns, 20) + ts_mean(returns, 20))", "Low vol combined with positive short return."),
+        ("group_rank(-ts_std_dev(returns, 60), industry)", "Industry-relative low volatility."),
+    ],
+    "MICROSTRUCTURE": [
+        ("rank(close / vwap - 1)", "Close-to-VWAP ratio: buying pressure indicator."),
+        ("rank(ts_mean(close / vwap - 1, 10))", "10-day persistent VWAP premium signal."),
+        ("rank(ts_corr(returns, ts_delta(volume, 1), 20))", "Price-volume correlation over 20 days."),
+    ],
+    "SENTIMENT": [
+        ("rank(ts_zscore(news_sentiment, 20))", "Abnormal sentiment Z-score over 20 days."),
+        ("group_rank(ts_mean(news_sentiment, 5), industry)", "Relative near-term sentiment within industry."),
+        ("rank(ts_delta(est_eps, 63))", "Quarterly change in EPS estimates as analyst sentiment."),
+    ],
+}
+
+
 def _templates_for_category(category: str) -> list[tuple[str, str]]:
-    templates = {
-        "QUALITY": [
-            ("group_rank(ts_rank(operating_income / assets, 252), industry)", "Peer-relative profitability efficiency should persist."),
-            ("rank(ts_rank(cashflow_op / assets, 252) + ts_rank(operating_income / assets, 252))", "Cash-flow-backed quality reduces accrual risk."),
-        ],
-        "MOMENTUM": [
-            ("rank(ts_mean(returns, 60) - ts_mean(returns, 252))", "Intermediate momentum net of long-horizon drift may persist."),
-        ],
-        "REVERSAL": [
-            ("rank(ts_delta(volume, 20)) * rank(-returns)", "Volume shock exhaustion can mean revert."),
-        ],
-        "LIQUIDITY": [
-            ("rank(-ts_mean(volume / adv20, 20))", "Lower relative turnover can capture liquidity premia."),
-        ],
-        "VOLATILITY": [
-            ("rank(-ts_std_dev(returns, 60))", "Low-volatility stocks may earn a defensive premium."),
-        ],
-        "MICROSTRUCTURE": [
-            ("rank(vwap - close)", "VWAP-close deviations can proxy intraday pressure."),
-        ],
-        "SENTIMENT": [
-            ("rank(ts_zscore(news_sentiment, 20))", "Abnormal sentiment may precede delayed repricing."),
-        ],
-    }
-    return templates.get(category, templates["QUALITY"])
+    return _ALL_TEMPLATES.get(category, _ALL_TEMPLATES["QUALITY"])
