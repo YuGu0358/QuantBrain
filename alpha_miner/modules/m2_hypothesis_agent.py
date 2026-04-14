@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import os, json, time
+import os, json, re, time
 import random
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
@@ -146,6 +146,21 @@ class HypothesisAgent:
             "seed": 42,
         }
 
+    @staticmethod
+    def _extract_json(raw: str) -> dict[str, Any]:
+        """Parse JSON from LLM output, stripping markdown code fences if present."""
+        text = raw.strip()
+        # Strip ```json ... ``` or ``` ... ``` wrappers
+        match = re.search(r"```(?:json)?\s*(\{[\s\S]*?\})\s*```", text)
+        if match:
+            text = match.group(1)
+        # Fallback: find first { ... } block in case of leading explanation text
+        elif not text.startswith("{"):
+            brace = text.find("{")
+            if brace != -1:
+                text = text[brace:]
+        return json.loads(text)
+
     def _call_llm(self, request_payload: dict[str, Any]) -> dict[str, Any]:
         if self.router is None:
             raise NotImplementedError("No router")
@@ -154,13 +169,17 @@ class HypothesisAgent:
             provider = request_payload.get("_provider") or self.router.pick(role)
             raw, ti, to, latency = self._call_provider(provider, request_payload)
             if request_payload.get("response_format") == "strict_json_selected_indices_v1":
-                selected_indices = json.loads(raw).get("selected_indices", []) if raw else []
+                selected_indices = self._extract_json(raw).get("selected_indices", []) if raw else []
                 self.router.record_result(provider.name, role, len(selected_indices) > 0, latency, ti, to)
                 return {"selected_indices": selected_indices}
-            candidates = json.loads(raw).get("candidates", []) if raw else []
+            parsed = self._extract_json(raw) if raw else {}
+            candidates = parsed.get("candidates", [])
             self.router.record_result(provider.name, role, len(candidates) > 0, latency, ti, to)
+            if not candidates:
+                print(f"[llm] {provider.name}/{role} returned 0 candidates. raw[:200]={raw[:200]!r}", flush=True)
             return {"candidates": candidates}
-        except Exception:
+        except Exception as exc:
+            print(f"[llm] {role} call failed: {exc}. raw[:200]={locals().get('raw','')[:200]!r}", flush=True)
             if request_payload.get("response_format") == "strict_json_selected_indices_v1":
                 return {"selected_indices": []}
             return {"candidates": []}
