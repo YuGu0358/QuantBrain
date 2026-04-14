@@ -217,6 +217,12 @@ def main() -> None:
             print(f"[distiller] skipped: {exc}")
     if router is not None:
         router.save_state(output_dir / "llm_router_state.json")
+        # Also write to RUNS_DIR root so the dashboard can find it
+        global_state_path = output_dir.parent / "llm_router_state.json"
+        try:
+            router.save_state(global_state_path)
+        except Exception:
+            pass
     append_jsonl(progress_path, {"stage": "finished", "summary": summary})
     print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
 

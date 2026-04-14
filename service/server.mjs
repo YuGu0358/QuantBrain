@@ -431,7 +431,23 @@ async function buildRunsIndex(authContext = systemAuthContext()) {
 }
 
 async function readLlmRouterState() {
-  return await maybeReadJson(path.join(RUNS_DIR, "llm_router_state.json"));
+  // Try global state file first (written by Python after each run)
+  const global = await maybeReadJson(path.join(RUNS_DIR, "llm_router_state.json"));
+  if (global) return global;
+  // Fall back: scan most recent run directories for per-run state
+  try {
+    const entries = await safeReadDir(RUNS_DIR);
+    const runDirs = entries
+      .filter(f => f.startsWith("scheduled-") || f.startsWith("manual-") || f.startsWith("repair-"))
+      .sort()
+      .reverse()
+      .slice(0, 10);
+    for (const d of runDirs) {
+      const s = await maybeReadJson(path.join(RUNS_DIR, d, "llm_router_state.json"));
+      if (s) return s;
+    }
+  } catch (_) {}
+  return null;
 }
 
 async function readRun(runId, compact = false, authContext = systemAuthContext()) {
