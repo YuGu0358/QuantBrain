@@ -2960,7 +2960,7 @@ body{display:flex}
             return '<div style="padding:10px 0;border-bottom:1px solid var(--border)">' +
               '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">' +
               '<span style="font-size:10px;font-weight:700;color:' + col + ';text-transform:uppercase;letter-spacing:.08em;background:' + col + '22;padding:2px 8px;border-radius:4px">' + esc(e.category||'') + '</span>' +
-              '<span style="font-size:10px;color:var(--t3);font-family:\'JetBrains Mono\',monospace">' + esc(e.field||'') + '</span>' +
+              '<span style="font-size:10px;color:var(--t3);font-family:\\'JetBrains Mono\\',monospace">' + esc(e.field||'') + '</span>' +
               '<span style="font-size:10px;color:var(--t3);margin-left:auto">' + ts + '</span>' +
               '</div>' +
               '<div style="font-size:12px;color:var(--t2);line-height:1.5">' + esc(e.objective||'') + '</div>' +
