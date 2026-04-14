@@ -2276,6 +2276,7 @@ body{display:flex}
 .data-table td{padding:10px 12px;border-bottom:1px solid var(--border);color:var(--t2);font-family:'JetBrains Mono',monospace;font-size:11px}
 .data-table tr:last-child td{border-bottom:none}
 .data-table tr:hover td{background:var(--card2)}
+.jb{font-family:'JetBrains Mono',monospace}
 .badge{display:inline-flex;align-items:center;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:600}
 .badge.run{background:var(--blue-dim);color:var(--blue);border:1px solid rgba(59,130,246,.2)}
 .badge.done{background:var(--green-dim);color:var(--green);border:1px solid rgba(16,185,129,.2)}
@@ -2706,7 +2707,7 @@ body{display:flex}
       var pa = $('pipeline-active');
       if (pa) {
         pa.innerHTML = active.length
-          ? active.map(function(x){ return '<div style="background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:12px 14px;margin-bottom:8px"><div style="font-family:\'JetBrains Mono\',monospace;font-size:12px;color:var(--t1)">' + esc(x.runId || '\u2013') + '</div><div style="font-size:11px;color:var(--t3);margin-top:4px">' + esc(x.status || '\u2013') + ' \u00b7 ' + esc(x.engine || '\u2013') + '</div></div>'; }).join('')
+          ? active.map(function(x){ return '<div style="background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:12px 14px;margin-bottom:8px"><div class="jb" style="font-size:12px;color:var(--t1)">' + esc(x.runId || '\u2013') + '</div><div style="font-size:11px;color:var(--t3);margin-top:4px">' + esc(x.status || '\u2013') + ' \u00b7 ' + esc(x.engine || '\u2013') + '</div></div>'; }).join('')
           : '<div style="font-size:12px;color:var(--t3)">No active runs</div>';
         var pl = $('pipeline-log');
         if (pl) {
