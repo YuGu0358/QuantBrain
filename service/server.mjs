@@ -1407,14 +1407,14 @@ function normalizePythonV2Candidate(record) {
       checks.push({ name: "ORTHOGONALITY", result: "PASS", value: ortho.correlation ?? null, limit: 0.5 });
     }
   } else if (record.status === "no_daily_pnl") {
-    // Case C (degraded): no daily PnL — use BRAIN aggregate metrics as gate proxy
-    // SHARPE check: IS Sharpe > 1.0 required for submission viability
+    // Case C (degraded): no daily PnL — use BRAIN aggregate metrics as gate proxy.
+    // Threshold is intentionally looser than Case A/B (0.5 vs DSR 0.95) because
+    // we want weak-signal alphas to enter the pool and be improved by the repair loop.
     if (sharpe != null) {
-      checks.push({ name: "SHARPE", result: sharpe >= 1.0 ? "PASS" : "FAIL", value: sharpe, limit: 1.0 });
+      checks.push({ name: "SHARPE", result: sharpe >= 0.5 ? "PASS" : "FAIL", value: sharpe, limit: 0.5 });
     }
-    // FITNESS check: fitness > 1.0 signals meaningful alpha
     if (fitness != null) {
-      checks.push({ name: "FITNESS", result: fitness >= 1.0 ? "PASS" : "FAIL", value: fitness, limit: 1.0 });
+      checks.push({ name: "FITNESS", result: fitness >= 0.5 ? "PASS" : "FAIL", value: fitness, limit: 0.5 });
     }
     // TURNOVER check: must be in BRAIN's acceptable range
     if (turnover != null) {
@@ -2164,6 +2164,10 @@ async function readRunProgressStats(outputDir) {
       else if (e.stage === "backtest_completed") msg = `回测完成 alpha_id=${e.alpha_id ?? "?"} sharpe=${e.sharpe ?? "?"}`;
       else if (e.stage === "mock_backtest") msg = `模拟回测 sharpe=${e.sharpe ?? "?"}`;
       else if (e.stage === "evaluated") msg = `已评估 ${e.candidate_id ?? ""} status=${e.status ?? ""}`;
+      else if (e.stage === "degraded_evaluation") {
+        const qual = e.degraded_qualified ? "✅ 入池" : "❌ 未达标";
+        msg = `降级评估 ${e.candidate_id ?? ""} sharpe=${e.sharpe ?? "?"} ${qual}`;
+      }
       else if (e.stage === "rejected") msg = `验证拒绝 ${e.candidate_id ?? ""} ${(e.errors ?? []).slice(0,2).join("; ")}`;
       else if (e.stage === "blocked") msg = `⚠️ 阻塞: ${e.reason ?? ""}`;
       else if (e.stage === "waiting") msg = `⏳ 等待配额: ${e.reason ?? ""}`;

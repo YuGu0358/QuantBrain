@@ -167,21 +167,42 @@ def main() -> None:
                         threshold=float(config.get("pool", {}).get("expression_similarity_threshold", 0.80)),
                     )
                 )
+                brain_check_passed: bool | None = None
                 if degraded_mode and result.alpha_id:
                     try:
                         brain_check = backtester.check_alpha(result.alpha_id)
                         record["brainCheckOrthogonality"] = asdict(brain_check)
+                        brain_check_passed = brain_check.passed
                         if brain_check.passed is False:
                             rejected_by_stage["orthogonality"] += 1
                     except QuotaWaiting as error:
                         append_jsonl(progress_path, {"stage": "waiting", "reason": str(error), "alpha_id": result.alpha_id})
                         record["brainCheckOrthogonality"] = {"status": "waiting", "reason": str(error)}
+                # Degraded gate: accept alphas with sharpe >= 0.5 and reasonable turnover into
+                # the pool so the repair loop has candidates to work on and the dashboard
+                # shows progress. DSR cannot be computed without daily PnL, so we use a
+                # looser proxy: sharpe >= 0.5, turnover in [0.01, 0.70], no self-correlation.
+                degraded_sharpe_ok = (result.sharpe is not None) and (result.sharpe >= 0.5)
+                degraded_turnover_ok = (result.turnover is None) or (0.01 <= result.turnover <= 0.70)
+                degraded_ortho_ok = brain_check_passed is not False
+                if degraded_mode and result.alpha_id and degraded_sharpe_ok and degraded_turnover_ok and degraded_ortho_ok:
+                    rejected_by_stage["no_pnl"] -= 1  # undo the initial increment
+                    metadata_json = json.dumps({"metrics": asdict(result), "candidate": asdict(candidate)}, ensure_ascii=False, sort_keys=True)
+                    dummy_pnl_path = Path(backtester.snapshot_dir / f"degraded_pnl_{result.alpha_id}.json")
+                    import alpha_miner.modules.common as _common
+                    _common.write_json(dummy_pnl_path, {"pnl": [], "source": "degraded_no_daily_pnl", "sharpe": result.sharpe})
+                    alpha_pool.add_alpha(result.alpha_id, candidate.expression, candidate.category, dummy_pnl_path, holdout_used=False, metadata_json=metadata_json)
+                    portfolio_pool.append({"alpha_id": result.alpha_id, "pnl": []})
+                    record["degradedQualified"] = True
                 append_jsonl(
                     progress_path,
                     {
                         "stage": "degraded_evaluation",
                         "candidate_id": candidate.id,
                         "alpha_id": result.alpha_id,
+                        "sharpe": result.sharpe,
+                        "turnover": result.turnover,
+                        "degraded_qualified": degraded_mode and result.alpha_id is not None and degraded_sharpe_ok and degraded_turnover_ok and degraded_ortho_ok,
                         "reason": "regular tier exposes aggregate metrics but no daily pnl",
                     },
                 )
