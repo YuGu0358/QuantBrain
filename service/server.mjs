@@ -540,8 +540,15 @@ function scheduleNextRun(reason) {
 async function buildRunsIndex(authContext = systemAuthContext()) {
   const dirs = await visibleRunDirs(await listRunDirs(RUNS_DIR), authContext);
   const diversityStats = await latestDiversityStats(dirs);
+  const activeList = [...activeRuns.values()].filter((run) => run.status === "running" && canAccessOwner(authContext, run.ownerId));
+  // Annotate python-v2 active runs with live progress stats from progress.jsonl
+  await Promise.all(activeList.map(async (run) => {
+    if (run.engine !== "legacy-js") {
+      run.progressStats = await readRunProgressStats(run.outputDir);
+    }
+  }));
   return {
-    active: [...activeRuns.values()].filter((run) => run.status === "running" && canAccessOwner(authContext, run.ownerId)),
+    active: activeList,
     recent: await Promise.all(dirs.sort().reverse().slice(0, 30).map((runId) => readRun(runId, true))),
     storedRuns: dirs.sort().reverse(),
     scheduler: publicSchedulerState(),
@@ -2073,6 +2080,27 @@ async function readProgressTail(filePath, maxLines) {
   }
 }
 
+async function readRunProgressStats(outputDir) {
+  try {
+    const text = await readFile(path.join(outputDir, "progress.jsonl"), "utf8");
+    const lines = text.trim().split(/\r?\n/).filter(Boolean);
+    let nGen = 0, nSim = 0, nGate = 0;
+    for (const line of lines) {
+      const e = safeJson(line);
+      if (!e) continue;
+      if (e.stage === "evaluated") nSim++;
+      if (e.stage === "rejected") nGen++;
+    }
+    nGen += nSim; // total generated = simulated + rejected
+    // pick up qualified count from pool.json if already written
+    const pool = await maybeReadJson(path.join(outputDir, "pool.json"));
+    if (pool) nGate = pool.qualified ?? 0;
+    return { nGen, nSim, nGate };
+  } catch {
+    return null;
+  }
+}
+
 async function safeReadDir(dirPath) {
   try {
     return await readdir(dirPath);
@@ -2855,8 +2883,15 @@ body{display:flex}
         else if (line.indexOf('[gate-pass]') === 0 || line.indexOf('[passed]') === 0) { nGate++; nSub++; }
         else if (line.indexOf('[gate-fail]') === 0 || line.indexOf('[failed]') === 0) nGate++;
       });
-      // For python-v2: use summary fields from most recent run if no active run
-      if (!activeRun && recent.length) {
+      // For python-v2 active run: use live progressStats injected by server
+      if (activeRun && activeRun.progressStats) {
+        var ps = activeRun.progressStats;
+        nGen = ps.nGen || 0;
+        nSim = ps.nSim || 0;
+        nGate = ps.nGate || 0;
+      }
+      // Fallback: use last completed run's summary when no active-run data available
+      if (!nGen && recent.length) {
         var latestSum = recent[0] ? (recent[0].summary || {}) : {};
         if (latestSum.generatedCandidates) nGen = latestSum.generatedCandidates;
         if (latestSum.total_brain_simulations) nSim = latestSum.total_brain_simulations;

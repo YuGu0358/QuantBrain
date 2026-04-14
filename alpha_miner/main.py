@@ -252,7 +252,8 @@ def main() -> None:
 def phase0_mode(mode: str) -> str:
     if mode == "generate":
         return "not_required_for_generate"
-    report = Path("docs/phase0_brain_probe_report.md")
+    # Use absolute path so it resolves correctly regardless of CWD (Railway, local, etc.)
+    report = Path(__file__).parent.parent / "docs" / "phase0_brain_probe_report.md"
     if not report.exists():
         return "phase0_brain_probe_report_missing"
     text = report.read_text(encoding="utf-8")
