@@ -1241,6 +1241,7 @@ async function handleRunFinished(runState) {
       repairDepth,
       rootAlphaId: runState.parentAlphaId ?? bestRepairCandidate.alphaId,
       ownerId: runState.ownerId,
+      _category: bestRepairCandidate._category ?? null,
     });
   } else {
     pushAutoLoopEvent({ type: "no-repair-candidate", runId: runState.runId, ownerId: runState.ownerId });
@@ -1273,7 +1274,7 @@ async function tryAutoSubmitCandidates(candidates, sourceRunId, ownerId = "defau
   return null;
 }
 
-async function enqueueRepairFromGate({ alpha, gate, source, sourceRunId, repairDepth = 0, rootAlphaId = null, ownerId = "default" }) {
+async function enqueueRepairFromGate({ alpha, gate, source, sourceRunId, repairDepth = 0, rootAlphaId = null, ownerId = "default", _category = null }) {
   if (!AUTO_REPAIR_ENABLED) {
     pushAutoLoopEvent({ type: "repair-disabled", alphaId: alpha?.id ?? gate?.alphaId ?? null, ownerId, source });
     await saveAutoLoopState();
@@ -1290,7 +1291,7 @@ async function enqueueRepairFromGate({ alpha, gate, source, sourceRunId, repairD
     return { queued: false, runId: autoLoopState.activeRepair?.runId ?? null, reason: "repair already queued" };
   }
 
-  const item = buildRepairQueueItem({ alpha, gate, source, sourceRunId, repairDepth, rootAlphaId, ownerId });
+  const item = buildRepairQueueItem({ alpha, gate, source, sourceRunId, repairDepth, rootAlphaId, ownerId, _category: _category ?? alpha?._category ?? null });
   autoLoopState.queue.push(item);
   autoLoopState.lastAction = `Queued repair for ${alphaId}`;
   pushAutoLoopEvent({ type: "repair-queued", alphaId, ownerId, source, repairDepth, failedChecks: item.failedChecks });
@@ -1298,7 +1299,7 @@ async function enqueueRepairFromGate({ alpha, gate, source, sourceRunId, repairD
   return { queued: true, runId: null, reason: "queued" };
 }
 
-function buildRepairQueueItem({ alpha, gate, source, sourceRunId, repairDepth, rootAlphaId, ownerId = "default" }) {
+function buildRepairQueueItem({ alpha, gate, source, sourceRunId, repairDepth, rootAlphaId, ownerId = "default", _category = null }) {
   const alphaId = alpha?.id ?? gate?.alphaId;
   const failedChecks = failedCheckNames(gate);
   const createdAt = new Date().toISOString();
@@ -1307,6 +1308,7 @@ function buildRepairQueueItem({ alpha, gate, source, sourceRunId, repairDepth, r
     parentAlphaId: alphaId,
     rootAlphaId: rootAlphaId ?? alphaId,
     expression: alpha?.expression ?? null,
+    _category: _category ?? alpha?._category ?? null,
     ownerId: sanitizeOwnerId(ownerId),
     gate,
     alpha,
@@ -1462,10 +1464,11 @@ function repairPriority(candidate) {
   const failures = new Set(failedCheckNames(gate));
   let score = Number(candidate.totalScore ?? 0);
   if (metrics.testSharpe !== null && metrics.testSharpe > 0) score += 1.5;
-  if (failures.has("LOW_SHARPE") || failures.has("LOW_FITNESS")) score += 1.0;
+  // Accept both legacy names (LOW_SHARPE) and python-v2 names (SHARPE / FITNESS)
+  if (failures.has("LOW_SHARPE") || failures.has("SHARPE") || failures.has("LOW_FITNESS") || failures.has("FITNESS")) score += 1.0;
   if (failures.has("SELF_CORRELATION")) score += 0.6;
   if (failures.has("LOW_SUB_UNIVERSE_SHARPE")) score += 0.4;
-  if (metrics.turnover !== null && metrics.turnover > 0.7) score -= 1.0;
+  if (failures.has("HIGH_TURNOVER") || failures.has("TURNOVER") || (metrics.turnover !== null && metrics.turnover > 0.7)) score -= 1.0;
   if (metrics.testSharpe !== null && metrics.testSharpe <= 0) score -= 0.5;
   return score;
 }
@@ -1508,10 +1511,12 @@ function summarizeCandidateAsAlpha(candidate) {
     grade: null,
     expression: candidate.expression ?? null,
     isSharpe: toNumber(metrics.isSharpe),
-    isFitness: toNumber(metrics.isFitness),
+    // python-v2 stores fitness as metrics.fitness; legacy-js uses metrics.isFitness
+    isFitness: toNumber(metrics.isFitness ?? metrics.fitness),
     turnover: toNumber(metrics.turnover),
     testSharpe: toNumber(metrics.testSharpe),
-    testFitness: toNumber(metrics.testFitness),
+    testFitness: toNumber(metrics.testFitness ?? metrics.fitness),
+    _category: candidate._category ?? null,
   };
 }
 
@@ -1529,11 +1534,12 @@ function buildRepairObjective(item) {
 function repairNextAction(failedChecks, alpha) {
   const names = new Set(failedChecks);
   const actions = [];
-  if (names.has("LOW_SHARPE") || names.has("LOW_FITNESS")) actions.push("strength repair via peer-relative blend / denominator swap");
-  if (names.has("HIGH_TURNOVER")) actions.push("turnover repair via decay and slower windows");
+  // Accept both legacy names and python-v2 names
+  if (names.has("LOW_SHARPE") || names.has("SHARPE") || names.has("LOW_FITNESS") || names.has("FITNESS") || names.has("DSR")) actions.push("strength repair via peer-relative blend / denominator swap");
+  if (names.has("HIGH_TURNOVER") || names.has("TURNOVER")) actions.push("turnover repair via decay and slower windows");
   if (names.has("LOW_SUB_UNIVERSE_SHARPE")) actions.push("sub-universe repair via group/subindustry relative transform");
   if (names.has("CONCENTRATED_WEIGHT")) actions.push("concentration repair via rank/group_rank/truncation-safe transforms");
-  if (names.has("SELF_CORRELATION")) actions.push("crowding repair via material concept/horizon/group change");
+  if (names.has("SELF_CORRELATION") || names.has("ORTHOGONALITY")) actions.push("crowding repair via material concept/horizon/group change");
   if (alpha?.testSharpe !== null && alpha?.testSharpe <= 0) actions.push("robustness repair because testSharpe is non-positive");
   return actions.join("; ") || "targeted repair from gate feedback";
 }
