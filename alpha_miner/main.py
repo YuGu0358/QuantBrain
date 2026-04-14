@@ -77,6 +77,12 @@ def main() -> None:
 
     batch_size = int(args.batch_size or generation_cfg.get("batch_size", 10))
     category = args.category or agent.sample_underweight_category({})
+    sim_settings: dict[str, Any] = {}
+    if args.sim_settings:
+        try:
+            sim_settings = json.loads(args.sim_settings)
+        except Exception:
+            pass
 
     # If repair context is provided, bias the objective toward fixing the parent alpha
     effective_objective = args.objective
@@ -132,7 +138,7 @@ def main() -> None:
     elif args.mode in {"evaluate", "loop"}:
         for candidate in valid_candidates:
             try:
-                result = backtester.submit_alpha(candidate.expression, period="IS")
+                result = backtester.submit_alpha(candidate.expression, period="IS", settings=sim_settings or None)
             except QuotaWaiting as error:
                 append_jsonl(progress_path, {"stage": "waiting", "reason": str(error)})
                 break
@@ -278,6 +284,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--resume-from", default=None)
     parser.add_argument("--repair-context", default=None)
     parser.add_argument("--use-llm", action="store_true")
+    parser.add_argument("--sim-settings", default=None, help="JSON string of BRAIN simulation settings overrides")
     parser.add_argument("--verbose", default="true")
     return parser.parse_args()
 

@@ -78,6 +78,17 @@ const OBJECTIVE_HISTORY_PATH = path.join(RUNS_DIR, "objective-history.json");
 let objectiveHistory = [];
 
 const activeRuns = new Map();
+const DEFAULT_SIM_SETTINGS = {
+  region: "USA",
+  universe: "TOP3000",
+  delay: 1,
+  decay: 4,
+  neutralization: "INDUSTRY",
+  truncation: 0.08,
+  pasteurization: "ON",
+  unitHandling: "VERIFY",
+};
+
 const schedulerState = {
   enabled: process.env.AUTO_RUN_ENABLED === "true",
   engine: normalizeEngine(DEFAULT_ENGINE),
@@ -87,6 +98,7 @@ const schedulerState = {
   rounds: DEFAULT_ROUNDS,
   batchSize: DEFAULT_BATCH_SIZE,
   concurrency: DEFAULT_CONCURRENCY,
+  simulationSettings: { ...DEFAULT_SIM_SETTINGS },
   lastTickAt: null,
   lastRunId: null,
   lastSkipReason: null,
@@ -258,6 +270,19 @@ const server = createServer(async (req, res) => {
       if (Number.isFinite(Number(body.concurrency)) && Number(body.concurrency) >= 1) {
         schedulerState.concurrency = clampInt(body.concurrency, DEFAULT_CONCURRENCY, 1, 3);
       }
+      if (body.simulationSettings && typeof body.simulationSettings === "object") {
+        const s = body.simulationSettings;
+        const merged = { ...schedulerState.simulationSettings };
+        if (["USA","EUROPE","ASIA"].includes(s.region)) merged.region = s.region;
+        if (["TOP500","TOP1000","TOP2000","TOP3000"].includes(s.universe)) merged.universe = s.universe;
+        if ([0, 1].includes(Number(s.delay))) merged.delay = Number(s.delay);
+        if (Number.isFinite(Number(s.decay)) && Number(s.decay) >= 0 && Number(s.decay) <= 13) merged.decay = Number(s.decay);
+        if (["NONE","SUBINDUSTRY","INDUSTRY","SECTOR","MARKET"].includes(s.neutralization)) merged.neutralization = s.neutralization;
+        if (Number.isFinite(Number(s.truncation)) && Number(s.truncation) >= 0.01 && Number(s.truncation) <= 0.1) merged.truncation = Number(s.truncation);
+        if (["ON","OFF"].includes(s.pasteurization)) merged.pasteurization = s.pasteurization;
+        if (["VERIFY","CASH"].includes(s.unitHandling)) merged.unitHandling = s.unitHandling;
+        schedulerState.simulationSettings = merged;
+      }
       scheduleNextRun("scheduler-update");
       return sendJson(res, 200, publicSchedulerState());
     }
@@ -312,6 +337,7 @@ async function createRun(input, source, authContext = systemAuthContext()) {
   const rounds = Number(input.rounds ?? schedulerState.rounds);
   const batchSize = Number(input.batchSize ?? schedulerState.batchSize);
   const concurrency = clampInt(input.concurrency ?? schedulerState.concurrency, DEFAULT_CONCURRENCY, 1, 3);
+  const simulationSettings = input.simulationSettings ?? schedulerState.simulationSettings ?? DEFAULT_SIM_SETTINGS;
   const ownerId = sanitizeOwnerId(input.ownerId ?? authContext?.userId ?? "default");
   const outputDir = path.join(RUNS_DIR, runId);
   const credentialEnv = mode === "generate"
@@ -343,7 +369,7 @@ async function createRun(input, source, authContext = systemAuthContext()) {
     credentialSource: credentialEnv.source,
     startedAt: now.toISOString(),
   });
-  const command = buildRunCommand({ engine, mode, objective, rounds, batchSize, concurrency, outputDir, repairContextPath });
+  const command = buildRunCommand({ engine, mode, objective, rounds, batchSize, concurrency, simulationSettings, outputDir, repairContextPath });
   const child = spawn(
     command.bin,
     command.args,
@@ -518,6 +544,7 @@ async function tickScheduler() {
       rounds: schedulerState.rounds,
       batchSize: schedulerState.batchSize,
       concurrency: schedulerState.concurrency,
+      simulationSettings: schedulerState.simulationSettings,
       ownerId: AUTO_RUN_OWNER_ID,
     },
     "scheduler",
@@ -745,7 +772,7 @@ async function readRunDiversityStats(outputDir) {
   return batch?.diversityStats ?? null;
 }
 
-function buildRunCommand({ engine, mode, objective, rounds, batchSize, concurrency, outputDir, repairContextPath }) {
+function buildRunCommand({ engine, mode, objective, rounds, batchSize, concurrency, simulationSettings, outputDir, repairContextPath }) {
   if (engine === "legacy-js") {
     const args = [
       path.resolve(__dirname, "./agentic_alpha_lab.mjs"),
@@ -789,6 +816,9 @@ function buildRunCommand({ engine, mode, objective, rounds, batchSize, concurren
     "true",
   ];
   if (repairContextPath) pythonArgs.push("--repair-context", repairContextPath);
+  if (simulationSettings && Object.keys(simulationSettings).length > 0) {
+    pythonArgs.push("--sim-settings", JSON.stringify(simulationSettings));
+  }
   return { bin: PYTHON_BIN, args: pythonArgs };
 }
 
@@ -1744,6 +1774,7 @@ function publicSchedulerState() {
     intervalMinutes: schedulerState.intervalMinutes,
     rounds: schedulerState.rounds,
     batchSize: schedulerState.batchSize,
+    simulationSettings: schedulerState.simulationSettings,
     lastTickAt: schedulerState.lastTickAt,
     lastRunId: schedulerState.lastRunId,
     lastSkipReason: schedulerState.lastSkipReason,
@@ -2772,6 +2803,15 @@ body{display:flex}
       <div class="form-row"><div class="form-label">批次大小</div><input class="form-input" id="s-batch" type="number" min="1"></div>
       <div class="form-row"><div class="form-label">轮数</div><input class="form-input" id="s-rounds" type="number" min="1"></div>
       <div class="form-row"><div class="form-label">挖掘目标</div><input class="form-input" id="s-objective" type="text"></div>
+      <div style="font-size:11px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:0.5px;margin:16px 0 8px">BRAIN 仿真参数</div>
+      <div class="form-row"><div class="form-label">市场区域</div><select class="form-select" id="s-region"><option value="USA">USA</option><option value="EUROPE">EUROPE</option><option value="ASIA">ASIA</option></select></div>
+      <div class="form-row"><div class="form-label">交易宇宙</div><select class="form-select" id="s-universe"><option value="TOP500">TOP500</option><option value="TOP1000">TOP1000</option><option value="TOP2000">TOP2000</option><option value="TOP3000">TOP3000</option></select></div>
+      <div class="form-row"><div class="form-label">交易延迟</div><select class="form-select" id="s-delay"><option value="1">1（默认）</option><option value="0">0</option></select></div>
+      <div class="form-row"><div class="form-label">信号衰减 (0-13)</div><input class="form-input" id="s-decay" type="number" min="0" max="13"></div>
+      <div class="form-row"><div class="form-label">中性化方式</div><select class="form-select" id="s-neutralization"><option value="INDUSTRY">INDUSTRY</option><option value="NONE">NONE</option><option value="SUBINDUSTRY">SUBINDUSTRY</option><option value="SECTOR">SECTOR</option><option value="MARKET">MARKET</option></select></div>
+      <div class="form-row"><div class="form-label">仓位截断 (0.01-0.1)</div><input class="form-input" id="s-truncation" type="number" min="0.01" max="0.1" step="0.01"></div>
+      <div class="form-row"><div class="form-label">Pasteurization</div><select class="form-select" id="s-pasteurization"><option value="ON">ON</option><option value="OFF">OFF</option></select></div>
+      <div class="form-row"><div class="form-label">Unit Handling</div><select class="form-select" id="s-unithandling"><option value="VERIFY">VERIFY</option><option value="CASH">CASH</option></select></div>
       <button class="save-btn" id="s-save">保存设置</button>
       <div style="font-size:12px;color:var(--t3);margin-top:10px;min-height:16px" id="s-status"></div>
     </div>
@@ -3192,6 +3232,15 @@ body{display:flex}
       if ($('s-batch')) $('s-batch').value = d.batchSize || 5;
       if ($('s-rounds')) $('s-rounds').value = d.rounds || 3;
       if ($('s-objective')) $('s-objective').value = d.objective || '';
+      var ss = d.simulationSettings || {};
+      if ($('s-region')) $('s-region').value = ss.region || 'USA';
+      if ($('s-universe')) $('s-universe').value = ss.universe || 'TOP3000';
+      if ($('s-delay')) $('s-delay').value = String(ss.delay ?? 1);
+      if ($('s-decay')) $('s-decay').value = ss.decay ?? 4;
+      if ($('s-neutralization')) $('s-neutralization').value = ss.neutralization || 'INDUSTRY';
+      if ($('s-truncation')) $('s-truncation').value = ss.truncation ?? 0.08;
+      if ($('s-pasteurization')) $('s-pasteurization').value = ss.pasteurization || 'ON';
+      if ($('s-unithandling')) $('s-unithandling').value = ss.unitHandling || 'VERIFY';
       settingsLoaded = true;
     } catch(e) {}
   }
@@ -3206,7 +3255,17 @@ body{display:flex}
         intervalMinutes: Number($('s-interval') ? $('s-interval').value : 60),
         batchSize: Number($('s-batch') ? $('s-batch').value : 5),
         rounds: Number($('s-rounds') ? $('s-rounds').value : 3),
-        objective: $('s-objective') ? ($('s-objective').value || '').trim() : ''
+        objective: $('s-objective') ? ($('s-objective').value || '').trim() : '',
+        simulationSettings: {
+          region: $('s-region') ? $('s-region').value : 'USA',
+          universe: $('s-universe') ? $('s-universe').value : 'TOP3000',
+          delay: Number($('s-delay') ? $('s-delay').value : 1),
+          decay: Number($('s-decay') ? $('s-decay').value : 4),
+          neutralization: $('s-neutralization') ? $('s-neutralization').value : 'INDUSTRY',
+          truncation: Number($('s-truncation') ? $('s-truncation').value : 0.08),
+          pasteurization: $('s-pasteurization') ? $('s-pasteurization').value : 'ON',
+          unitHandling: $('s-unithandling') ? $('s-unithandling').value : 'VERIFY'
+        }
       };
       var r = await fetch('/scheduler', { method:'POST', headers: h, body: JSON.stringify(body) });
       if (st) st.textContent = r.ok ? '已保存 \u2713' : '错误 ' + r.status;
