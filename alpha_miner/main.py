@@ -35,7 +35,7 @@ def main() -> None:
     generation_cfg = config.get("generation", {})
     set_seed(int(generation_cfg.get("seed", 42)))
     progress_path = output_dir / "progress.jsonl"
-    append_jsonl(progress_path, {"stage": "started", "mode": args.mode, "objective": args.objective, "engine": "python-v2"})
+    append_jsonl(progress_path, {"stage": "started", "mode": args.mode, "objective": args.objective, "engine": "python-v2", "repairContext": args.repair_context})
 
     kb = KnowledgeBase(output_dir / "alpha_pool.db")
     kb.import_wq101_negative_examples(PACKAGE_ROOT / "seeds" / "wq101_alphas.json")
@@ -77,7 +77,29 @@ def main() -> None:
 
     batch_size = int(args.batch_size or generation_cfg.get("batch_size", 10))
     category = args.category or agent.sample_underweight_category({})
-    candidates = agent.generate_batch(args.objective, category=category, n=batch_size, use_llm=args.use_llm)
+
+    # If repair context is provided, bias the objective toward fixing the parent alpha
+    effective_objective = args.objective
+    if args.repair_context:
+        try:
+            ctx = read_json(Path(args.repair_context))
+            parent_expr = ctx.get("expression") or ""
+            failed = ctx.get("failedChecks") or []
+            gate_reasons = ctx.get("gate", {}).get("reasons") or []
+            if parent_expr:
+                repair_note = f" [修复: {parent_expr[:120]}"
+                if failed:
+                    repair_note += f", 失败检查: {', '.join(failed[:3])}"
+                if gate_reasons:
+                    repair_note += f", 原因: {'; '.join(gate_reasons[:2])}"
+                repair_note += "]"
+                effective_objective = args.objective + repair_note
+            if ctx.get("_category"):
+                category = ctx["_category"]
+        except Exception:
+            pass
+
+    candidates = agent.generate_batch(effective_objective, category=category, n=batch_size, use_llm=args.use_llm)
 
     validator_records = []
     valid_candidates = []
@@ -251,6 +273,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--category", default=None)
     parser.add_argument("--config", default=None)
     parser.add_argument("--resume-from", default=None)
+    parser.add_argument("--repair-context", default=None)
     parser.add_argument("--use-llm", action="store_true")
     parser.add_argument("--verbose", default="true")
     return parser.parse_args()

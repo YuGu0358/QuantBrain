@@ -52,7 +52,7 @@ const DEFAULT_ROUNDS = Number(process.env.AUTO_RUN_ROUNDS ?? 1);
 const DEFAULT_CONCURRENCY = clampInt(process.env.AUTO_RUN_CONCURRENCY, 3, 1, 3);
 const AUTO_LOOP_STATE_PATH = path.join(RUNS_DIR, "auto-loop-state.json");
 const AUTO_REPAIR_ENABLED = process.env.AUTO_REPAIR_ENABLED === "true";
-const AUTO_REPAIR_ENGINE = normalizeEngine(process.env.AUTO_REPAIR_ENGINE ?? "legacy-js");
+const AUTO_REPAIR_ENGINE = normalizeEngine(process.env.AUTO_REPAIR_ENGINE ?? "python-v2");
 const AUTO_REPAIR_MAX_ROUNDS = clampInt(process.env.AUTO_REPAIR_MAX_ROUNDS, 5, 1, 10);
 const AUTO_REPAIR_BATCH_SIZE = clampInt(process.env.AUTO_REPAIR_BATCH_SIZE, 5, 1, 10);
 const AUTO_SUBMIT_ENABLED = process.env.AUTO_SUBMIT_ENABLED === "true";
@@ -759,27 +759,26 @@ function buildRunCommand({ engine, mode, objective, rounds, batchSize, concurren
       args,
     };
   }
-  return {
-    bin: PYTHON_BIN,
-    args: [
-      "-m",
-      "alpha_miner.main",
-      "--mode",
-      mode,
-      "--objective",
-      objective,
-      "--rounds",
-      String(rounds),
-      "--batch-size",
-      String(batchSize),
-      "--concurrency",
-      String(concurrency),
-      "--output-dir",
-      outputDir,
-      "--verbose",
-      "true",
-    ],
-  };
+  const pythonArgs = [
+    "-m",
+    "alpha_miner.main",
+    "--mode",
+    mode,
+    "--objective",
+    objective,
+    "--rounds",
+    String(rounds),
+    "--batch-size",
+    String(batchSize),
+    "--concurrency",
+    String(concurrency),
+    "--output-dir",
+    outputDir,
+    "--verbose",
+    "true",
+  ];
+  if (repairContextPath) pythonArgs.push("--repair-context", repairContextPath);
+  return { bin: PYTHON_BIN, args: pythonArgs };
 }
 
 async function analyzeIdea(description, authContext = systemAuthContext()) {
@@ -1180,12 +1179,6 @@ async function handleRunFinished(runState) {
     await saveAutoLoopState();
     return;
   }
-  if (runState.engine !== "legacy-js") {
-    if (runState.source === "repair") await clearActiveRepair(runState.runId);
-    await saveAutoLoopState();
-    return;
-  }
-
   const candidates = await loadRunScoredCandidates(runState.outputDir);
   const bestRepairCandidate = chooseRepairCandidate(candidates);
   const submitted = await tryAutoSubmitCandidates(candidates, runState.runId, runState.ownerId);
@@ -1331,6 +1324,14 @@ async function clearActiveRepair(runId) {
 }
 
 async function loadRunScoredCandidates(outputDir) {
+  // python-v2: read pool.json records
+  const pool = await maybeReadJson(path.join(outputDir, "pool.json"));
+  if (pool?.records) {
+    return pool.records
+      .filter((r) => r.backtest?.alpha_id)
+      .map((r) => normalizePythonV2Candidate(r));
+  }
+  // legacy-js: read batch-round-N.json scored arrays
   const files = (await safeReadDir(outputDir)).filter((name) => /^batch-round-\d+\.json$/.test(name)).sort();
   const candidates = [];
   for (const file of files) {
@@ -1340,6 +1341,42 @@ async function loadRunScoredCandidates(outputDir) {
     }
   }
   return candidates;
+}
+
+function normalizePythonV2Candidate(record) {
+  const bt = record.backtest ?? {};
+  const cand = record.candidate ?? {};
+  const dsr = record.dsr ?? 0;
+  const ortho = record.orthogonality ?? {};
+  const checks = [];
+  // Synthesize BRAIN-style check results from python-v2 metrics
+  if (typeof dsr === "number" && dsr < 0.95) {
+    checks.push({ name: "DSR", result: "FAIL", value: dsr, limit: 0.95 });
+  } else if (typeof dsr === "number") {
+    checks.push({ name: "DSR", result: "PASS", value: dsr, limit: 0.95 });
+  }
+  if (ortho.passed === false) {
+    checks.push({ name: "ORTHOGONALITY", result: "FAIL", value: ortho.correlation ?? null, limit: 0.5 });
+  } else if (ortho.passed === true) {
+    checks.push({ name: "ORTHOGONALITY", result: "PASS", value: ortho.correlation ?? null, limit: 0.5 });
+  }
+  const sharpe = bt.sharpe ?? null;
+  return {
+    alphaId: bt.alpha_id,
+    expression: cand.expression ?? null,
+    stage: "IS",
+    totalScore: dsr || sharpe || 0,
+    checks,
+    metrics: {
+      isSharpe: sharpe,
+      testSharpe: sharpe,   // IS sharpe used as proxy
+      fitness: bt.fitness ?? null,
+      turnover: bt.turnover ?? null,
+      netSharpe: bt.net_sharpe ?? null,
+    },
+    _engine: "python-v2",
+    _category: cand.category ?? null,
+  };
 }
 
 function chooseRepairCandidate(candidates) {
