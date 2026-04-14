@@ -2701,7 +2701,7 @@ body {
         if (logEl) {
           const recent0 = d.recent?.[0];
           if (recent0?.progressTail?.length) {
-            logEl.textContent = recent0.progressTail.map(l => l.msg ?? JSON.stringify(l)).join('\n');
+            logEl.textContent = recent0.progressTail.map(l => l.msg ?? JSON.stringify(l)).join('\\n');
           } else {
             logEl.textContent = 'No progress data';
           }
