@@ -90,6 +90,8 @@ class HypothesisAgent:
                 if len(selected) >= n:
                     break
 
+            if not selected:
+                selected = self._deterministic_candidates(objective, category, n)
             response = {"candidates": [asdict(item) for item in selected]}
             self.cache.put(request_payload, response)
         else:
@@ -98,8 +100,33 @@ class HypothesisAgent:
 
         return [Candidate(**item) for item in response.get("candidates", [])][:n]
 
+    def _get_operators(self) -> list[str]:
+        return [
+            "abs", "correlation", "covariance", "delay", "delta", "divide", "group_neutralize",
+            "group_rank", "hump", "log", "max", "min", "multiply", "power", "rank", "regression_neut",
+            "scale", "sign", "ts_arg_max", "ts_arg_min", "ts_backfill", "ts_corr", "ts_covariance",
+            "ts_decay_linear", "ts_delta", "ts_mean", "ts_rank", "ts_std_dev", "ts_sum", "ts_zscore",
+            "winsorize", "zscore",
+        ]
+
+    def _get_fields(self) -> list[str]:
+        return [
+            "adv20", "assets", "cashflow_op", "close", "est_eps", "high", "industry", "low",
+            "news_sentiment", "open", "operating_income", "returns", "subindustry", "volume", "vwap",
+        ]
+
     def _request_payload(self, objective: str, category: str, n: int) -> dict[str, Any]:
         context = self.kb.rag_context(category)
+        user_content = json.dumps({
+            "objective": objective,
+            "category": category,
+            "n": n,
+            "allowed_operators": sorted(self._get_operators()),
+            "allowed_fields": sorted(self._get_fields()),
+            "positive_context": context.positive,
+            "negative_wq101_context": context.negative,
+            "failure_patterns_to_avoid": [p["reason"] for p in getattr(context, "failure_patterns", [])],
+        }, ensure_ascii=False)
         return {
             "model": self.model,
             "messages": [
@@ -109,14 +136,7 @@ class HypothesisAgent:
                 },
                 {
                     "role": "user",
-                    "content": {
-                        "objective": objective,
-                        "category": category,
-                        "n": n,
-                        "positive_context": context.positive,
-                        "negative_wq101_context": context.negative,
-                        "failure_patterns_to_avoid": [p["reason"] for p in getattr(context, "failure_patterns", [])],
-                    },
+                    "content": user_content,
                 },
             ],
             "temperature": self.temperature,
