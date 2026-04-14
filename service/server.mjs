@@ -2787,7 +2787,11 @@ body{display:flex}
       // KPIs
       var ks = $('k-submitted');
       if (ks) ks.textContent = al.submitted ? al.submitted.length : 0;
-      var passed = recent.filter(function(x){ return x.summary && x.summary.passedGate; }).length;
+      // Bug fix: sum.passedGate never exists; use qualified_alphas_count (Python) as proxy
+      var passed = recent.filter(function(x){
+        var sum = x.summary || {};
+        return sum.qualified_alphas_count > 0 || sum.passedGate;
+      }).length;
       var kg = $('k-gatepass');
       if (kg) kg.textContent = recent.length ? Math.round(passed/recent.length*100) + '%' : '\u2013';
       var kr = $('k-repair');
@@ -2798,6 +2802,8 @@ body{display:flex}
       if (ks4 && lr) ks4.textContent = 'of $' + (lr.daily_budget_usd ?? 3.6).toFixed(2) + ' limit';
 
       // Pipeline stages — parse from active run logs
+      // Note: [gate-pass]/[gate-fail] are never emitted; python-v2 stdout has no stage lines
+      // For python-v2 active runs: read stage counts from summary (for completed part)
       var activeRun = active[0] || null;
       var runLogs = (activeRun && activeRun.logs) ? activeRun.logs : [];
       var nGen = 0, nSim = 0, nVal = 0, nGate = 0, nSub = 0;
@@ -2805,13 +2811,22 @@ body{display:flex}
       runLogs.forEach(function(l) {
         var line = l.line || '';
         if (line) lastLogLine = line;
+        // legacy-js log prefixes
         if (line.indexOf('[submit]') === 0) nGen++;
         else if (line.indexOf('[simulation]') === 0) nSim++;
         else if (line.indexOf('[complete]') === 0) nVal++;
         else if (line.indexOf('[gate-pass]') === 0 || line.indexOf('[passed]') === 0) { nGate++; nSub++; }
         else if (line.indexOf('[gate-fail]') === 0 || line.indexOf('[failed]') === 0) nGate++;
       });
-      var stageMap = { gen: nGen, val: nVal, sim: nSim, gate: nGate, sub: nSub };
+      // For python-v2: use summary fields from most recent run if no active run
+      if (!activeRun && recent.length) {
+        var latestSum = recent[0] ? (recent[0].summary || {}) : {};
+        if (latestSum.generatedCandidates) nGen = latestSum.generatedCandidates;
+        if (latestSum.total_brain_simulations) nSim = latestSum.total_brain_simulations;
+        if (latestSum.validCandidates) nVal = latestSum.validCandidates;
+        if (latestSum.qualified_alphas_count != null) { nGate = latestSum.total_brain_simulations || 0; nSub = latestSum.qualified_alphas_count; }
+      }
+      var stageMap = { gen: nGen, val: nVal, sim: nSim, gate: nGate || '\u2013', sub: nSub };
       Object.keys(stageMap).forEach(function(s) {
         var el = $('ps-' + s);
         if (el) el.textContent = stageMap[s];
@@ -2880,15 +2895,27 @@ body{display:flex}
       }
 
       // Alphas panel
-      var totalGen = 0, totalSim = 0, totalPass = 0, totalFail = 0, totalSub = 0;
+      // Bug fix: use correct field names for both engines:
+      // Python: generatedCandidates, total_brain_simulations, qualified_alphas_count
+      // Legacy-js: no direct equivalents, infer from topCandidates
+      var totalGen = 0, totalSim = 0, totalPass = 0, totalFail = 0;
       var totalRep = al.queue ? al.queue.length : (al.queueLength || 0);
+      // totalSub comes from autoLoopState submissions, not summary
+      var totalSub = (al.submitted || []).length;
       recent.forEach(function(x) {
         var sum = x.summary || {};
-        totalGen += (sum.generated || 0);
-        totalSim += (sum.simulated || 0);
-        if (sum.passedGate) totalPass++;
-        else if (sum.status === 'completed') totalFail++;
-        totalSub += (sum.submitted || 0);
+        // generatedCandidates (python) or generated (legacy) or topCandidates count
+        totalGen += (sum.generatedCandidates || sum.generated ||
+                     (sum.topCandidates ? sum.topCandidates.length : 0));
+        // total_brain_simulations (python) or simulated (legacy)
+        totalSim += (sum.total_brain_simulations || sum.simulated || 0);
+        // qualified_alphas_count (python) or passedGate bool (legacy)
+        var qc = sum.qualified_alphas_count;
+        if (qc != null) { if (qc > 0) totalPass++; }
+        else if (sum.passedGate) totalPass++;
+        // rejected count: python has rejected_by_stage totals
+        var rej = sum.rejected_by_stage;
+        if (rej) totalFail += Object.values(rej).reduce(function(a,b){ return a + (b||0); }, 0);
       });
       var setAl = function(id, v) { var el = $(id); if (el) el.textContent = v != null ? v : '\u2013'; };
       setAl('as-gen', totalGen || '\u2013');
@@ -2898,16 +2925,21 @@ body{display:flex}
       setAl('as-sub', totalSub || '\u2013');
       setAl('as-rep', totalRep || '\u2013');
 
+      // Bug fix: submitted alphas come from al.submitted (autoLoopState), not from summary.submitted
       var ab = $('alphas-body');
       if (ab) {
-        var submittedAlphas = recent.filter(function(x){ return x.summary && x.summary.submitted > 0; });
-        ab.innerHTML = submittedAlphas.length
-          ? submittedAlphas.slice(0,20).map(function(x) {
-              var s = x.state || {};
-              var sum = x.summary || {};
-              var gateCls = sum.passedGate ? 'pass' : 'no';
-              var gateText = sum.passedGate ? 'PASS' : (s.status === 'completed' ? 'FAIL' : '\u2013');
-              return '<tr><td style="color:var(--t1)">' + esc((x.runId||'').slice(0,14)) + '</td><td><span class="badge ' + gateCls + '">' + gateText + '</span></td><td>' + (sum.bestSharpe != null ? sum.bestSharpe.toFixed(3) : '\u2013') + '</td><td>' + (sum.fitness != null ? sum.fitness.toFixed(2) : '\u2013') + '</td><td>' + esc(s.engine || '\u2013') + '</td><td>' + esc(s.startedAt ? new Date(s.startedAt).toLocaleTimeString() : '\u2013') + '</td></tr>';
+        var subs = (al.submitted || []).slice().reverse().slice(0, 20);
+        ab.innerHTML = subs.length
+          ? subs.map(function(sub) {
+              var alpha = sub.alpha || {};
+              var isSharpe = alpha.isSharpe != null ? Number(alpha.isSharpe).toFixed(3) : '\u2013';
+              var iFitness = alpha.isFitness != null ? Number(alpha.isFitness).toFixed(2) : '\u2013';
+              var ts = sub.at ? new Date(sub.at).toLocaleTimeString() : '\u2013';
+              return '<tr><td style="color:var(--t1)">' + esc((sub.alphaId||'').slice(0,22)) + '</td>' +
+                '<td><span class="badge pass">SUBMITTED</span></td>' +
+                '<td>' + isSharpe + '</td><td>' + iFitness + '</td>' +
+                '<td>' + esc(sub.source || '\u2013') + '</td>' +
+                '<td>' + ts + '</td></tr>';
             }).join('')
           : '<tr><td colspan="6" style="color:var(--t3);font-family:inherit">No submitted alphas yet</td></tr>';
       }
@@ -2965,6 +2997,8 @@ body{display:flex}
       }
 
       // Runs panel
+      // Bug fix: sum.submitted/sum.bestSharpe don't exist; derive from topCandidates + qualified_alphas_count
+      // Bug fix: s.startedAt undefined for completed runs; fall back to sum.generatedAt
       var rb = $('runs-body');
       if (rb) {
         rb.innerHTML = recent.slice(0,20).map(function(x) {
@@ -2972,7 +3006,25 @@ body{display:flex}
           var sum = x.summary || {};
           var cls = s.status==='running'?'run':s.status==='completed'?'done':'fail';
           var dt = x.runId ? x.runId.slice(0,12) : '\u2013';
-          return '<tr><td>' + esc(dt) + '</td><td><span class="badge ' + cls + '">' + esc(s.status || '\u2013') + '</span></td><td>' + esc(s.engine || '\u2013') + '</td><td>' + (sum.submitted ?? '\u2013') + '</td><td>' + (sum.bestSharpe != null ? sum.bestSharpe.toFixed(2) : '\u2013') + '</td><td>' + esc(s.startedAt ? new Date(s.startedAt).toLocaleTimeString() : '\u2013') + '</td></tr>';
+          // bestSharpe: scan topCandidates for max sharpe or DSR score
+          var bestSharpe = null;
+          if (sum.topCandidates && sum.topCandidates.length) {
+            sum.topCandidates.forEach(function(c) {
+              var sh = (c.metrics && c.metrics.sharpe != null) ? c.metrics.sharpe
+                      : (c.totalScore != null ? c.totalScore : null);
+              if (sh != null && (bestSharpe == null || +sh > bestSharpe)) bestSharpe = +sh;
+            });
+          }
+          // qualified count: python qualified_alphas_count, legacy n/a
+          var qualCount = sum.qualified_alphas_count != null ? sum.qualified_alphas_count : '\u2013';
+          // startedAt: in-memory state has it; completed disk-read uses generatedAt from summary
+          var startedAt = s.startedAt || sum.generatedAt || null;
+          return '<tr><td>' + esc(dt) + '</td>' +
+            '<td><span class="badge ' + cls + '">' + esc(s.status || '\u2013') + '</span></td>' +
+            '<td>' + esc(s.engine || '\u2013') + '</td>' +
+            '<td>' + qualCount + '</td>' +
+            '<td>' + (bestSharpe != null ? bestSharpe.toFixed(2) : '\u2013') + '</td>' +
+            '<td>' + esc(startedAt ? new Date(startedAt).toLocaleTimeString() : '\u2013') + '</td></tr>';
         }).join('') || '<tr><td colspan="6" style="color:var(--t3);font-family:inherit">No runs found</td></tr>';
       }
 
