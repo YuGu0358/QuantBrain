@@ -2118,786 +2118,727 @@ input:focus { border-color: #007aff; box-shadow: 0 0 0 3px rgba(0,122,255,0.12);
 
 function dashboardHtml() {
   return `<!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="dashboard-token" content="${process.env.ADMIN_TOKEN ?? process.env.DASHBOARD_TOKEN ?? ''}">
 <meta name="registration-code-required" content="${REGISTRATION_CODE ? 'true' : 'false'}">
-<title>QuantBrain Dashboard v3</title>
+<title>QuantBrain</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
-* { box-sizing: border-box; margin: 0; padding: 0; }
-html, body { height: 100%; overflow: hidden; }
+:root{
+  --bg:#080c14;--surface:#0d1117;--card:#111927;--card2:#151e2e;
+  --border:#1e2d42;--border2:#243347;
+  --blue:#3b82f6;--blue-dim:rgba(59,130,246,0.12);
+  --green:#10b981;--green-dim:rgba(16,185,129,0.12);
+  --amber:#f59e0b;--amber-dim:rgba(245,158,11,0.12);
+  --red:#ef4444;--red-dim:rgba(239,68,68,0.12);
+  --purple:#8b5cf6;--purple-dim:rgba(139,92,246,0.12);
+  --t1:#f1f5f9;--t2:#94a3b8;--t3:#475569;--t4:#2d3f55;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;overflow:hidden;font-family:'Inter',-apple-system,sans-serif;background:var(--bg);color:var(--t1);-webkit-font-smoothing:antialiased}
+body{display:flex}
 
-body {
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', sans-serif;
-  background: #f5f5f7;
-  color: #1d1d1f;
-  display: flex;
-  flex-direction: column;
-  -webkit-font-smoothing: antialiased;
-}
+/* Sidebar */
+.sidebar{width:220px;min-width:220px;background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column;padding:0}
+.sb-brand{padding:20px 18px 16px;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--border)}
+.sb-logo{width:32px;height:32px;background:var(--blue);border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:800;color:#fff;flex-shrink:0}
+.sb-name{font-size:15px;font-weight:700;color:var(--t1);letter-spacing:-0.3px}
+.sb-nav{flex:1;padding:10px 10px;display:flex;flex-direction:column;gap:2px}
+.sb-item{display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:8px;cursor:pointer;font-size:13px;color:var(--t3);transition:all .15s;border:1px solid transparent}
+.sb-item:hover{background:var(--card);color:var(--t2);border-color:var(--border)}
+.sb-item.active{background:var(--blue-dim);color:var(--blue);border-color:rgba(59,130,246,0.25);font-weight:500}
+.sb-icon{font-size:15px;width:20px;text-align:center;flex-shrink:0}
+.sb-bottom{padding:12px 10px;border-top:1px solid var(--border)}
+.sb-user{display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:8px;font-size:12px;color:var(--t3)}
+.sb-avatar{width:28px;height:28px;background:var(--blue);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#fff;flex-shrink:0}
 
-/* ── Nav ── */
-.nav {
-  background: rgba(255,255,255,0.85);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  border-bottom: 1px solid rgba(0,0,0,0.08);
-  height: 52px;
-  display: flex;
-  align-items: center;
-  padding: 0 28px;
-  gap: 32px;
-  flex-shrink: 0;
-}
-.nav-brand {
-  display: flex; align-items: center; gap: 9px;
-  font-size: 15px; font-weight: 600; color: #1d1d1f;
-  letter-spacing: -0.3px;
-}
-.nav-logo {
-  width: 26px; height: 26px;
-  background: #1d1d1f;
-  border-radius: 7px;
-  display: flex; align-items: center; justify-content: center;
-  font-size: 12px; font-weight: 800; color: #fff;
-}
-.nav-links { display: flex; gap: 2px; flex: 1; }
-.nav-link {
-  font-size: 13px; color: #86868b;
-  padding: 5px 12px; border-radius: 7px; cursor: pointer;
-  transition: all 0.15s;
-}
-.nav-link:hover { color: #1d1d1f; background: rgba(0,0,0,0.05); }
-.nav-link.active { color: #1d1d1f; background: rgba(0,0,0,0.07); font-weight: 500; }
-.nav-right { display: flex; align-items: center; gap: 12px; }
-.live-badge {
-  display: flex; align-items: center; gap: 6px;
-  font-size: 12px; color: #86868b;
-}
-.live-dot {
-  width: 6px; height: 6px;
-  background: #34c759;
-  border-radius: 50%;
-  box-shadow: 0 0 5px rgba(52,199,89,0.6);
-  animation: breathe 2.5s ease-in-out infinite;
-}
-@keyframes breathe { 0%,100%{opacity:1} 50%{opacity:0.4} }
+/* Main */
+.main{flex:1;display:flex;flex-direction:column;overflow:hidden}
+.topbar{height:52px;min-height:52px;display:flex;align-items:center;justify-content:space-between;padding:0 24px;border-bottom:1px solid var(--border);background:var(--surface)}
+.tb-title{font-size:15px;font-weight:600;color:var(--t1)}
+.tb-right{display:flex;align-items:center;gap:12px}
+.status-pill{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--t2);background:var(--card);border:1px solid var(--border);padding:5px 12px;border-radius:20px}
+.pulse{width:7px;height:7px;background:var(--green);border-radius:50%;box-shadow:0 0 6px rgba(16,185,129,0.7);animation:pulse 2.5s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+.panel{flex:1;overflow-y:auto;padding:24px;display:none}
+.panel.active{display:block}
 
-/* ── Layout ── */
-.layout {
-  flex: 1;
-  display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
-  gap: 16px;
-  padding: 20px 24px;
-  overflow: hidden;
-}
+/* Mining Status Banner */
+.mining-banner{display:flex;align-items:center;gap:12px;padding:14px 18px;border-radius:12px;margin-bottom:20px;border:1px solid var(--border);transition:all .4s ease}
+.mining-banner.active-mining{background:rgba(16,185,129,0.06);border-color:rgba(16,185,129,0.35)}
+.mining-banner.idle-mining{background:var(--card);border-color:var(--border)}
+.mining-indicator{width:10px;height:10px;border-radius:50%;flex-shrink:0;transition:all .4s}
+.mining-indicator.active-ind{background:var(--green);box-shadow:0 0 10px rgba(16,185,129,0.8);animation:pulse 2s ease-in-out infinite}
+.mining-indicator.idle-ind{background:var(--t4)}
+.mining-label{font-size:13px;font-weight:700;letter-spacing:.02em}
+.mining-label.active-lbl{color:var(--green)}
+.mining-label.idle-lbl{color:var(--t3)}
+.mining-task{font-size:12px;color:var(--t2);font-family:'JetBrains Mono',monospace;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mining-elapsed{font-size:11px;color:var(--t3);font-family:'JetBrains Mono',monospace;flex-shrink:0;margin-left:auto}
+.mining-sep{width:1px;height:20px;background:var(--border2);flex-shrink:0}
 
-/* ── Card ── */
-.card {
-  background: #ffffff;
-  border-radius: 16px;
-  padding: 24px;
-  overflow-y: auto;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 4px 16px rgba(0,0,0,0.04);
-}
+/* KPI row */
+.kpi-row{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:20px}
+.kpi{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:18px 20px}
+.kpi-label{font-size:11px;font-weight:500;color:var(--t3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px}
+.kpi-val{font-size:28px;font-weight:700;color:var(--t1);letter-spacing:-1px;font-family:'JetBrains Mono',monospace}
+.kpi-sub{font-size:11px;color:var(--t3);margin-top:4px}
+.kpi-sub.up{color:var(--green)}
+.kpi-sub.down{color:var(--red)}
 
-/* ── Eyebrow ── */
-.eyebrow {
-  font-size: 11px;
-  font-weight: 600;
-  color: #86868b;
-  text-transform: uppercase;
-  letter-spacing: 0.07em;
-  margin-bottom: 6px;
-}
+/* Grid panels */
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px}
+.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-bottom:16px}
+.box{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:20px}
+.box-title{font-size:11px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:14px}
 
-/* ── Big Number ── */
-.big-num {
-  font-size: 52px;
-  font-weight: 700;
-  letter-spacing: -2px;
-  line-height: 1;
-  color: #1d1d1f;
-  margin-bottom: 6px;
-}
-.big-num .unit {
-  font-size: 22px; font-weight: 400;
-  color: #86868b; margin-left: 4px;
-}
-.trend {
-  font-size: 13px; color: #34c759;
-  display: flex; align-items: center; gap: 4px;
-}
-.trend.warn { color: #ff9f0a; }
+/* Countdown */
+.cd-wrap{text-align:center;padding:8px 0 20px}
+.cd-time{font-size:42px;font-weight:300;font-family:'JetBrains Mono',monospace;color:var(--t1);letter-spacing:-1px;font-variant-numeric:tabular-nums}
+.cd-label{font-size:11px;color:var(--t3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px}
+.cd-sub{font-size:11px;color:var(--t3);margin-top:6px}
 
-/* ── Divider ── */
-.divider { height: 1px; background: #f0f0f2; margin: 20px 0; }
+/* Pipeline stages */
+.stages{display:flex;gap:8px;margin-top:4px}
+.stage{flex:1;background:var(--card2);border:1px solid var(--border);border-radius:10px;padding:14px 8px;text-align:center;cursor:default;position:relative;transition:border-color .2s}
+.stage:hover{border-color:var(--border2)}
+.stage-n{font-size:22px;font-weight:700;font-family:'JetBrains Mono',monospace;margin-bottom:4px}
+.stage-l{font-size:10px;color:var(--t3);text-transform:uppercase;letter-spacing:.05em}
+.stage-full{font-size:9px;color:var(--t4);margin-top:2px;letter-spacing:.03em}
+.c-blue{color:var(--blue)}.c-amber{color:var(--amber)}.c-purple{color:var(--purple)}.c-red{color:var(--red)}.c-green{color:var(--green)}
 
-/* ── Mini stats ── */
-.mini-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-.mini-stat .ms-label { font-size: 11px; color: #86868b; margin-bottom: 3px; }
-.mini-stat .ms-value { font-size: 22px; font-weight: 600; letter-spacing: -0.5px; color: #1d1d1f; }
-.mini-stat .ms-sub { font-size: 11px; color: #86868b; margin-top: 1px; }
-.ms-sub.up { color: #34c759; }
+/* Stage tooltip */
+.stage-tip{position:absolute;bottom:calc(100% + 8px);left:50%;transform:translateX(-50%);background:#1a2840;border:1px solid var(--border2);color:var(--t1);font-size:10px;padding:8px 12px;border-radius:8px;white-space:nowrap;z-index:200;font-family:'Inter',sans-serif;pointer-events:none;opacity:0;transition:opacity .15s;box-shadow:0 4px 16px rgba(0,0,0,0.4);min-width:160px;text-align:left}
+.stage-tip .tip-title{font-weight:600;font-size:11px;margin-bottom:4px}
+.stage-tip .tip-body{color:var(--t2);font-size:10px;line-height:1.5}
+.stage:hover .stage-tip{opacity:1}
 
-/* ── Pipeline ── */
-.pipeline { display: flex; gap: 6px; margin-top: 4px; }
-.p-stage {
-  flex: 1;
-  background: #f5f5f7;
-  border-radius: 10px;
-  padding: 12px 8px;
-  text-align: center;
-}
-.p-num {
-  font-size: 24px; font-weight: 600;
-  letter-spacing: -0.5px; margin-bottom: 3px;
-}
-.p-label { font-size: 10px; color: #86868b; text-transform: uppercase; letter-spacing: 0.04em; }
-.p-num.blue   { color: #007aff; }
-.p-num.yellow { color: #ff9f0a; }
-.p-num.purple { color: #af52de; }
-.p-num.red    { color: #ff3b30; }
-.p-num.green  { color: #34c759; }
+/* Current task strip */
+.current-task-strip{margin-top:14px;padding:10px 12px;background:var(--card2);border:1px solid var(--border);border-radius:8px;display:flex;align-items:center;gap:8px}
+.ct-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
+.ct-dot.running{background:var(--blue);animation:pulse 1.5s ease-in-out infinite}
+.ct-dot.idle{background:var(--t4)}
+.ct-label{font-size:10px;color:var(--t3);text-transform:uppercase;letter-spacing:.05em;flex-shrink:0}
+.ct-text{font-size:11px;color:var(--t2);font-family:'JetBrains Mono',monospace;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
-/* ── LLM bars ── */
-.llm-list { display: flex; flex-direction: column; gap: 16px; margin-top: 4px; }
-.llm-header {
-  display: flex; align-items: baseline;
-  justify-content: space-between; margin-bottom: 7px;
-}
-.llm-name { font-size: 13px; font-weight: 500; color: #1d1d1f; }
-.llm-role-tag { font-size: 11px; color: #86868b; margin-left: 7px; }
-.llm-rate { font-size: 13px; font-weight: 600; color: #1d1d1f; }
-.bar-track {
-  height: 4px;
-  background: #f0f0f2;
-  border-radius: 2px;
-  overflow: hidden;
-}
-.bar-fill { height: 100%; border-radius: 2px; }
-.bar-green  { background: #34c759; }
-.bar-yellow { background: #ff9f0a; }
-.bar-blue   { background: #007aff; }
+/* LLM bars */
+.llm-list{display:flex;flex-direction:column;gap:14px}
+.llm-row-head{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px}
+.llm-name{font-size:13px;font-weight:500;color:var(--t1)}
+.llm-tag{font-size:10px;color:var(--t3);margin-left:6px;background:var(--card2);padding:2px 7px;border-radius:4px;border:1px solid var(--border)}
+.llm-rate{font-size:12px;font-weight:600;font-family:'JetBrains Mono',monospace}
+.bar-track{height:3px;background:var(--border2);border-radius:2px;overflow:hidden}
+.bar-fill{height:100%;border-radius:2px;transition:width .5s ease}
+.llm-active-badge{font-size:9px;font-weight:700;color:var(--green);background:var(--green-dim);border:1px solid rgba(16,185,129,0.25);padding:1px 6px;border-radius:4px;margin-left:6px;letter-spacing:.04em;vertical-align:middle}
 
-/* ── Repair Queue ── */
-.repair-list { display: flex; flex-direction: column; gap: 8px; }
-.repair-row {
-  display: flex; align-items: center; gap: 10px;
-  padding: 10px 12px;
-  background: #f9f9f9;
-  border-radius: 10px;
-}
-.r-expr {
-  font-family: 'SF Mono', 'Fira Code', monospace;
-  font-size: 11px; color: #1d1d1f; flex: 1;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.r-tag {
-  font-size: 10px; font-weight: 600;
-  color: #ff9f0a; background: rgba(255,159,10,0.1);
-  padding: 2px 7px; border-radius: 5px; flex-shrink: 0;
-}
-.r-depth { font-size: 10px; color: #86868b; flex-shrink: 0; width: 30px; text-align: right; }
+/* Repair queue */
+.queue-list{display:flex;flex-direction:column;gap:6px}
+.queue-row{display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--card2);border:1px solid var(--border);border-radius:8px}
+.q-expr{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--t2);flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.q-tag{font-size:10px;font-weight:600;color:var(--amber);background:var(--amber-dim);padding:2px 8px;border-radius:4px;flex-shrink:0;border:1px solid rgba(245,158,11,0.2)}
+.q-depth{font-size:10px;color:var(--t3);flex-shrink:0;font-family:'JetBrains Mono',monospace;width:28px;text-align:right}
 
-/* ── Right panel ── */
-.countdown {
-  text-align: center; padding: 8px 0 20px;
-}
-.cd-label { font-size: 11px; color: #86868b; text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: 6px; }
-.cd-time { font-size: 44px; font-weight: 300; letter-spacing: -1px; color: #1d1d1f; font-variant-numeric: tabular-nums; }
-.cd-sub { font-size: 11px; color: #86868b; margin-top: 4px; }
+/* Activity */
+.act-list{display:flex;flex-direction:column;gap:12px}
+.act-row{display:flex;align-items:flex-start;gap:10px}
+.act-dot{width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;flex-shrink:0;font-weight:700}
+.act-dot.s{background:var(--green-dim);color:var(--green)}
+.act-dot.r{background:var(--amber-dim);color:var(--amber)}
+.act-dot.f{background:var(--red-dim);color:var(--red)}
+.act-expr{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--t2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.act-meta{font-size:10px;color:var(--t3);margin-top:3px}
 
-.idea-label { font-size: 11px; color: #86868b; text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: 8px; }
-.idea-field {
-  width: 100%;
-  background: #f5f5f7;
-  border: 1px solid rgba(0,0,0,0.08);
-  border-radius: 10px;
-  padding: 11px 13px;
-  color: #1d1d1f;
-  font-size: 13px;
-  font-family: inherit;
-  resize: none;
-  height: 76px;
-  line-height: 1.5;
-  outline: none;
-  transition: border-color 0.15s;
-}
-.idea-field:focus { border-color: rgba(0,0,0,0.2); background: #fff; }
-.idea-field::placeholder { color: #aeaeb2; }
-.run-btn {
-  margin-top: 8px; width: 100%;
-  background: #1d1d1f; color: #fff;
-  border: none; border-radius: 10px;
-  padding: 11px; font-size: 13px;
-  font-weight: 600; cursor: pointer;
-  font-family: inherit; letter-spacing: -0.2px;
-  transition: opacity 0.15s;
-}
-.run-btn:hover { opacity: 0.82; }
+/* Alpha status chips */
+.alpha-status-row{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px}
+.alpha-chip{display:flex;flex-direction:column;align-items:center;background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:10px 14px;flex:1;min-width:80px}
+.alpha-chip-val{font-size:20px;font-weight:700;font-family:'JetBrains Mono',monospace}
+.alpha-chip-label{font-size:9px;color:var(--t3);text-transform:uppercase;letter-spacing:.05em;margin-top:3px}
 
-/* ── Activity ── */
-.activity-feed { display: flex; flex-direction: column; gap: 14px; }
-.act-item { display: flex; align-items: flex-start; gap: 11px; }
-.act-icon {
-  width: 28px; height: 28px; border-radius: 50%;
-  display: flex; align-items: center; justify-content: center;
-  font-size: 11px; font-weight: 700; flex-shrink: 0;
-}
-.act-icon.submit { background: rgba(52,199,89,0.12); color: #34c759; }
-.act-icon.repair { background: rgba(255,159,10,0.12); color: #ff9f0a; }
-.act-icon.fail   { background: rgba(255,59,48,0.10);  color: #ff3b30; }
-.act-body { flex: 1; min-width: 0; }
-.act-expr {
-  font-family: 'SF Mono', 'Fira Code', monospace;
-  font-size: 11px; color: #1d1d1f;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.act-meta { font-size: 11px; color: #86868b; margin-top: 2px; }
+/* Idea box */
+.idea-field{width:100%;background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:10px 13px;color:var(--t1);font-size:13px;font-family:inherit;resize:none;height:72px;line-height:1.5;outline:none;transition:border-color .15s}
+.idea-field:focus{border-color:var(--blue)}
+.idea-field::placeholder{color:var(--t4)}
+.run-btn{margin-top:8px;width:100%;background:var(--blue);color:#fff;border:none;border-radius:8px;padding:10px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;transition:opacity .15s}
+.run-btn:hover{opacity:.85}
+.run-btn:disabled{opacity:.45;cursor:not-allowed}
+.run-status{font-size:11px;color:var(--t3);margin-top:6px;min-height:14px}
+
+/* Divider */
+.div{height:1px;background:var(--border);margin:16px 0}
+
+/* Runs table */
+.data-table{width:100%;border-collapse:collapse;font-size:12px}
+.data-table th{text-align:left;padding:8px 12px;font-size:10px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:.06em;border-bottom:1px solid var(--border)}
+.data-table td{padding:10px 12px;border-bottom:1px solid var(--border);color:var(--t2);font-family:'JetBrains Mono',monospace;font-size:11px}
+.data-table tr:last-child td{border-bottom:none}
+.data-table tr:hover td{background:var(--card2)}
+.badge{display:inline-flex;align-items:center;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:600}
+.badge.run{background:var(--blue-dim);color:var(--blue);border:1px solid rgba(59,130,246,.2)}
+.badge.done{background:var(--green-dim);color:var(--green);border:1px solid rgba(16,185,129,.2)}
+.badge.fail{background:var(--red-dim);color:var(--red);border:1px solid rgba(239,68,68,.2)}
+.badge.pass{background:var(--green-dim);color:var(--green);border:1px solid rgba(16,185,129,.2)}
+.badge.no{background:var(--red-dim);color:var(--red);border:1px solid rgba(239,68,68,.2)}
+
+/* Settings form */
+.form-row{display:flex;flex-direction:column;gap:6px;margin-bottom:16px}
+.form-label{font-size:11px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:.06em}
+.form-input,.form-select{background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:9px 12px;color:var(--t1);font-size:13px;font-family:inherit;outline:none;width:100%;transition:border-color .15s}
+.form-input:focus,.form-select:focus{border-color:var(--blue)}
+.form-select option{background:var(--card)}
+.save-btn{background:var(--blue);color:#fff;border:none;border-radius:8px;padding:10px 24px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;transition:opacity .15s}
+.save-btn:hover{opacity:.85}
 </style>
 </head>
 <body>
 
-<!-- Nav -->
-<div class="nav">
-  <div class="nav-brand">
-    <div class="nav-logo">Q</div>
-    QuantBrain
+<!-- Sidebar -->
+<div class="sidebar">
+  <div class="sb-brand">
+    <div class="sb-logo">Q</div>
+    <span class="sb-name">QuantBrain</span>
   </div>
-  <div class="nav-links">
-    <div class="nav-link active" data-tab="overview">Overview</div>
-    <div class="nav-link" data-tab="pipeline">Pipeline</div>
-    <div class="nav-link" data-tab="knowledge">Knowledge</div>
-    <div class="nav-link" data-tab="runs">Runs</div>
-    <div class="nav-link" data-tab="settings">Settings</div>
-  </div>
-  <div class="nav-right">
-    <div class="live-badge">
-      <div class="live-dot"></div>
-      Mining Active
+  <nav class="sb-nav">
+    <div class="sb-item active" data-tab="overview"><span class="sb-icon">⬡</span>Overview</div>
+    <div class="sb-item" data-tab="pipeline"><span class="sb-icon">◈</span>Pipeline</div>
+    <div class="sb-item" data-tab="alphas"><span class="sb-icon">◆</span>Alphas</div>
+    <div class="sb-item" data-tab="knowledge"><span class="sb-icon">◎</span>Knowledge</div>
+    <div class="sb-item" data-tab="runs"><span class="sb-icon">≡</span>Runs</div>
+    <div class="sb-item" data-tab="settings"><span class="sb-icon">⚙</span>Settings</div>
+  </nav>
+  <div class="sb-bottom">
+    <div class="sb-user" id="sb-user">
+      <div class="sb-avatar" id="sb-av">?</div>
+      <span id="sb-uname" style="font-size:12px;color:var(--t3)">Guest</span>
     </div>
   </div>
 </div>
 
-<!-- Panels -->
-<div id="panel-overview" class="panel" style="display:flex;flex:1;overflow:hidden">
-<div class="layout">
-
-  <!-- Card 1: Metrics + Pipeline -->
-  <div class="card">
-    <div class="eyebrow">Submitted Today</div>
-    <div class="big-num">24 <span class="unit">alphas</span></div>
-    <div class="trend">↑ 12% vs last week</div>
-
-    <div class="divider"></div>
-
-    <div class="mini-stats">
-      <div class="mini-stat">
-        <div class="ms-label">Gate Pass Rate</div>
-        <div class="ms-value">38%</div>
-        <div class="ms-sub up">↑ trending up</div>
+<!-- Main -->
+<div class="main">
+  <div class="topbar">
+    <span class="tb-title" id="topbar-title">Overview</span>
+    <div class="tb-right">
+      <div class="status-pill" id="sched-status">
+        <div class="pulse"></div>
+        <span id="sched-label">Loading…</span>
       </div>
-      <div class="mini-stat">
-        <div class="ms-label">Repair Success</div>
-        <div class="ms-value">61%</div>
-        <div class="ms-sub">3 in queue</div>
-      </div>
-      <div class="mini-stat">
-        <div class="ms-label">Simulations</div>
-        <div class="ms-value">47</div>
-        <div class="ms-sub">453 remaining</div>
-      </div>
-      <div class="mini-stat">
-        <div class="ms-label">Daily Spend</div>
-        <div class="ms-value">$0.38</div>
-        <div class="ms-sub">of $3.60 limit</div>
-      </div>
-    </div>
-
-    <div class="divider"></div>
-
-    <div class="eyebrow" style="margin-bottom:12px">Alpha Pipeline — Now</div>
-    <div class="pipeline">
-      <div class="p-stage"><div class="p-num blue">6</div><div class="p-label">Gen</div></div>
-      <div class="p-stage"><div class="p-num yellow">5</div><div class="p-label">Valid</div></div>
-      <div class="p-stage"><div class="p-num purple">5</div><div class="p-label">Sim</div></div>
-      <div class="p-stage"><div class="p-num red">2</div><div class="p-label">Gate</div></div>
-      <div class="p-stage"><div class="p-num green">1</div><div class="p-label">Sub</div></div>
+      <div class="status-pill" style="font-family:'JetBrains Mono',monospace;font-size:12px" id="topbar-cd">–:––</div>
     </div>
   </div>
 
-  <!-- Card 2: LLM Router + Repair -->
-  <div class="card">
-    <div class="eyebrow" style="margin-bottom:14px">LLM Router — Live</div>
-    <div class="llm-list">
-      <div>
-        <div class="llm-header">
-          <div><span class="llm-name">Deepseek V3</span><span class="llm-role-tag">Generate · 68%</span></div>
-          <div class="llm-rate" style="color:#34c759">42% pass</div>
-        </div>
-        <div class="bar-track"><div class="bar-fill bar-green" style="width:68%"></div></div>
-      </div>
-      <div>
-        <div class="llm-header">
-          <div><span class="llm-name">Gemini Flash</span><span class="llm-role-tag">Generate · 32%</span></div>
-          <div class="llm-rate" style="color:#ff9f0a">31% pass</div>
-        </div>
-        <div class="bar-track"><div class="bar-fill bar-yellow" style="width:32%"></div></div>
-      </div>
-      <div>
-        <div class="llm-header">
-          <div><span class="llm-name">Claude Haiku</span><span class="llm-role-tag">Repair · 75%</span></div>
-          <div class="llm-rate" style="color:#34c759">58% pass</div>
-        </div>
-        <div class="bar-track"><div class="bar-fill bar-green" style="width:75%"></div></div>
-      </div>
-      <div>
-        <div class="llm-header">
-          <div><span class="llm-name">GPT-4o-mini</span><span class="llm-role-tag">Judge / Distill</span></div>
-          <div class="llm-rate" style="color:#007aff">Infra</div>
-        </div>
-        <div class="bar-track"><div class="bar-fill bar-blue" style="width:100%"></div></div>
-      </div>
+  <!-- Overview -->
+  <div class="panel active" id="panel-overview">
+
+    <!-- Mining Status Banner -->
+    <div class="mining-banner idle-mining" id="mining-banner">
+      <div class="mining-indicator idle-ind" id="mining-ind"></div>
+      <span class="mining-label idle-lbl" id="mining-label">SYSTEM IDLE</span>
+      <div class="mining-sep"></div>
+      <span class="mining-task" id="mining-task">No active mining runs</span>
+      <span class="mining-elapsed" id="mining-elapsed"></span>
     </div>
 
-    <div class="divider"></div>
-
-    <div class="eyebrow" style="margin-bottom:12px">Repair Queue</div>
-    <div class="repair-list">
-      <div class="repair-row">
-        <div class="r-expr">rank(ts_rank(op_inc/assets, 252))</div>
-        <div class="r-tag">LOW_SHARPE</div>
-        <div class="r-depth">2/5</div>
-      </div>
-      <div class="repair-row">
-        <div class="r-expr">group_rank(cashflow_op/rev, sector)</div>
-        <div class="r-tag">SELF_CORR</div>
-        <div class="r-depth">1/5</div>
-      </div>
-      <div class="repair-row">
-        <div class="r-expr">rank(-ts_std_dev(returns, 60))</div>
-        <div class="r-tag">LOW_FIT</div>
-        <div class="r-depth">—</div>
-      </div>
+    <div class="kpi-row">
+      <div class="kpi"><div class="kpi-label">Submitted Today</div><div class="kpi-val" id="k-submitted">–</div><div class="kpi-sub up" id="k-sub1"></div></div>
+      <div class="kpi"><div class="kpi-label">Gate Pass Rate</div><div class="kpi-val" id="k-gatepass">–</div><div class="kpi-sub" id="k-sub2">recent runs</div></div>
+      <div class="kpi"><div class="kpi-label">Repair Queue</div><div class="kpi-val" id="k-repair">–</div><div class="kpi-sub" id="k-sub3"></div></div>
+      <div class="kpi"><div class="kpi-label">Daily Spend</div><div class="kpi-val" id="k-spend">–</div><div class="kpi-sub" id="k-sub4">of $3.60 limit</div></div>
     </div>
-  </div>
-
-  <!-- Card 3: Right Panel -->
-  <div class="card">
-    <div class="countdown">
-      <div class="cd-label">Next Run In</div>
-      <div class="cd-time">38:22</div>
-      <div class="cd-sub">loop · legacy-js · batch 3</div>
-    </div>
-
-    <div class="divider"></div>
-
-    <div style="margin-bottom:24px">
-      <div class="idea-label">Research Idea</div>
-      <textarea class="idea-field" placeholder="Describe your alpha idea in plain language..."></textarea>
-      <button class="run-btn">Optimize &amp; Run</button>
-    </div>
-
-    <div class="divider"></div>
-
-    <div class="eyebrow" style="margin-bottom:14px">Recent Activity</div>
-    <div class="activity-feed">
-      <div class="act-item">
-        <div class="act-icon submit">↑</div>
-        <div class="act-body">
-          <div class="act-expr">group_rank(ts_rank(op_inc/assets,252),ind)</div>
-          <div class="act-meta">Submitted · Sharpe 1.42 · 14:35</div>
+    <div class="grid3">
+      <div class="box">
+        <div class="box-title">Alpha Pipeline — Now</div>
+        <div class="stages">
+          <div class="stage">
+            <div class="stage-n c-blue" id="ps-gen">–</div>
+            <div class="stage-l">Gen</div>
+            <div class="stage-full">Generate</div>
+            <div class="stage-tip">
+              <div class="tip-title">Generate</div>
+              <div class="tip-body">LLM 根据研究方向生成新的因子表达式。每轮生成多条候选 Alpha。</div>
+            </div>
+          </div>
+          <div class="stage">
+            <div class="stage-n c-amber" id="ps-val">–</div>
+            <div class="stage-l">Valid</div>
+            <div class="stage-full">Validate</div>
+            <div class="stage-tip">
+              <div class="tip-title">Validate</div>
+              <div class="tip-body">语法检查 + 基本逻辑过滤。不合格的表达式在此阶段被剔除，节省仿真资源。</div>
+            </div>
+          </div>
+          <div class="stage">
+            <div class="stage-n c-purple" id="ps-sim">–</div>
+            <div class="stage-l">Sim</div>
+            <div class="stage-full">Simulate</div>
+            <div class="stage-tip">
+              <div class="tip-title">Simulate</div>
+              <div class="tip-body">提交至 WorldQuant BRAIN 进行历史回测。计算 Sharpe、Fitness 等绩效指标。</div>
+            </div>
+          </div>
+          <div class="stage">
+            <div class="stage-n c-red" id="ps-gate">–</div>
+            <div class="stage-l">Gate</div>
+            <div class="stage-full">Gate Check</div>
+            <div class="stage-tip">
+              <div class="tip-title">Gate Check</div>
+              <div class="tip-body">用 Sharpe 比率、Fitness 阈值过滤因子。只有通过 Gate 的 Alpha 才会被提交。</div>
+            </div>
+          </div>
+          <div class="stage">
+            <div class="stage-n c-green" id="ps-sub">–</div>
+            <div class="stage-l">Sub</div>
+            <div class="stage-full">Submit</div>
+            <div class="stage-tip">
+              <div class="tip-title">Submit</div>
+              <div class="tip-body">通过 Gate 的因子提交至 WorldQuant 生产池，等待人工评审与最终录用。</div>
+            </div>
+          </div>
+        </div>
+        <!-- Current task strip -->
+        <div class="current-task-strip" id="current-task-strip">
+          <div class="ct-dot idle" id="ct-dot"></div>
+          <span class="ct-label">Task</span>
+          <span class="ct-text" id="ct-text">Idle</span>
         </div>
       </div>
-      <div class="act-item">
-        <div class="act-icon repair">⟳</div>
-        <div class="act-body">
-          <div class="act-expr">rank(ts_delta(cashflow_op/assets, 252))</div>
-          <div class="act-meta">Repair round 3 · LOW_SHARPE · 13:58</div>
+      <div class="box">
+        <div class="box-title">LLM Router</div>
+        <div class="llm-list" id="llm-list">
+          <div style="font-size:12px;color:var(--t3)">Loading…</div>
         </div>
       </div>
-      <div class="act-item">
-        <div class="act-icon fail">✕</div>
-        <div class="act-body">
-          <div class="act-expr">rank(vwap - close) * rank(-returns)</div>
-          <div class="act-meta">Budget exhausted · 13:12</div>
+      <div class="box">
+        <div class="cd-wrap">
+          <div class="cd-label">Next Run In</div>
+          <div class="cd-time" id="cd-time">–:––</div>
+          <div class="cd-sub" id="cd-sub">–</div>
+        </div>
+        <div class="div"></div>
+        <div class="box-title">Research Idea</div>
+        <textarea class="idea-field" id="idea-field" placeholder="Describe your alpha idea in plain language…"></textarea>
+        <button class="run-btn" id="run-btn">Optimize &amp; Run</button>
+        <div class="run-status" id="run-status"></div>
+      </div>
+    </div>
+    <div class="grid2">
+      <div class="box">
+        <div class="box-title">Repair Queue</div>
+        <div class="queue-list" id="repair-list">
+          <div style="font-size:12px;color:var(--t3)">Loading…</div>
         </div>
       </div>
-      <div class="act-item">
-        <div class="act-icon submit">↑</div>
-        <div class="act-body">
-          <div class="act-expr">rank(ts_mean(returns,60)-ts_mean(returns,252))</div>
-          <div class="act-meta">Submitted · Sharpe 1.28 · 12:41</div>
+      <div class="box">
+        <div class="box-title">Recent Activity</div>
+        <div class="act-list" id="act-list">
+          <div style="font-size:12px;color:var(--t3)">Loading…</div>
         </div>
       </div>
     </div>
   </div>
 
-</div>
-</div><!-- /panel-overview -->
-
-<!-- Panel: Pipeline -->
-<div id="panel-pipeline" class="panel" style="display:none;padding:28px;overflow-y:auto;flex:1">
-  <div class="eyebrow" style="margin-bottom:20px">Active Runs</div>
-  <div id="pipeline-active" style="font-size:13px;color:#86868b">No active runs</div>
-  <div class="divider" style="margin:24px 0"></div>
-  <div class="eyebrow" style="margin-bottom:16px">Pipeline Stages</div>
-  <div class="pipeline" id="pipeline-stages">
-    <div class="p-stage"><div class="p-num blue" id="ps-gen">–</div><div class="p-label">Generate</div></div>
-    <div class="p-stage"><div class="p-num yellow" id="ps-val">–</div><div class="p-label">Validate</div></div>
-    <div class="p-stage"><div class="p-num purple" id="ps-sim">–</div><div class="p-label">Simulate</div></div>
-    <div class="p-stage"><div class="p-num red" id="ps-gate">–</div><div class="p-label">Gate</div></div>
-    <div class="p-stage"><div class="p-num green" id="ps-sub">–</div><div class="p-label">Submit</div></div>
+  <!-- Pipeline -->
+  <div class="panel" id="panel-pipeline">
+    <div class="box" style="margin-bottom:16px">
+      <div class="box-title">Active Runs</div>
+      <div id="pipeline-active" style="font-size:12px;color:var(--t3)">No active runs</div>
+    </div>
+    <div class="box">
+      <div class="box-title">Progress Log</div>
+      <div id="pipeline-log" style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--t2);background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:12px;max-height:400px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;line-height:1.6"></div>
+    </div>
   </div>
-  <div class="divider" style="margin:24px 0"></div>
-  <div class="eyebrow" style="margin-bottom:12px">Progress Log</div>
-  <div id="pipeline-log" style="font-family:monospace;font-size:11px;color:#3a3a3c;background:#f5f5f7;border-radius:8px;padding:12px;max-height:280px;overflow-y:auto;white-space:pre-wrap;word-break:break-all"></div>
-</div>
 
-<!-- Panel: Knowledge -->
-<div id="panel-knowledge" class="panel" style="display:none;padding:28px;overflow-y:auto;flex:1">
-  <div class="eyebrow" style="margin-bottom:20px">LLM Router — All Providers</div>
-  <div id="knowledge-llm" style="font-size:13px;color:#86868b">Loading…</div>
-  <div class="divider" style="margin:24px 0"></div>
-  <div class="eyebrow" style="margin-bottom:16px">Budget</div>
-  <div id="knowledge-budget" style="font-size:13px;color:#3a3a3c">–</div>
-</div>
-
-<!-- Panel: Runs -->
-<div id="panel-runs" class="panel" style="display:none;padding:28px;overflow-y:auto;flex:1">
-  <div class="eyebrow" style="margin-bottom:16px">Recent Runs</div>
-  <div id="runs-list" style="font-size:13px;color:#86868b">Loading…</div>
-</div>
-
-<!-- Panel: Settings -->
-<div id="panel-settings" class="panel" style="display:none;padding:28px;overflow-y:auto;flex:1;max-width:520px">
-  <div class="eyebrow" style="margin-bottom:20px">Scheduler Settings</div>
-  <div style="display:flex;flex-direction:column;gap:16px" id="settings-form">
-    <label style="display:flex;flex-direction:column;gap:6px;font-size:13px;color:#3a3a3c">
-      Enabled
-      <select id="s-enabled" style="padding:8px 10px;border-radius:8px;border:1px solid #d2d2d7;font-size:13px;background:#fff">
-        <option value="true">Yes</option><option value="false">No</option>
-      </select>
-    </label>
-    <label style="display:flex;flex-direction:column;gap:6px;font-size:13px;color:#3a3a3c">
-      Mode
-      <select id="s-mode" style="padding:8px 10px;border-radius:8px;border:1px solid #d2d2d7;font-size:13px;background:#fff">
-        <option value="evaluate">evaluate</option>
-        <option value="loop">loop</option>
-        <option value="generate">generate</option>
-      </select>
-    </label>
-    <label style="display:flex;flex-direction:column;gap:6px;font-size:13px;color:#3a3a3c">
-      Interval (minutes)
-      <input id="s-interval" type="number" min="15" style="padding:8px 10px;border-radius:8px;border:1px solid #d2d2d7;font-size:13px">
-    </label>
-    <label style="display:flex;flex-direction:column;gap:6px;font-size:13px;color:#3a3a3c">
-      Batch Size
-      <input id="s-batch" type="number" min="1" style="padding:8px 10px;border-radius:8px;border:1px solid #d2d2d7;font-size:13px">
-    </label>
-    <label style="display:flex;flex-direction:column;gap:6px;font-size:13px;color:#3a3a3c">
-      Rounds
-      <input id="s-rounds" type="number" min="1" style="padding:8px 10px;border-radius:8px;border:1px solid #d2d2d7;font-size:13px">
-    </label>
-    <label style="display:flex;flex-direction:column;gap:6px;font-size:13px;color:#3a3a3c">
-      Objective
-      <input id="s-objective" type="text" style="padding:8px 10px;border-radius:8px;border:1px solid #d2d2d7;font-size:13px">
-    </label>
-    <button id="s-save" style="margin-top:8px;padding:10px 24px;border-radius:20px;border:none;background:#1d1d1f;color:#fff;font-size:14px;font-weight:500;cursor:pointer">Save Settings</button>
-    <div id="s-status" style="font-size:12px;color:#86868b;min-height:16px"></div>
+  <!-- Alphas -->
+  <div class="panel" id="panel-alphas">
+    <div class="box" style="margin-bottom:16px">
+      <div class="box-title" style="margin-bottom:16px">Alpha 因子状态汇总</div>
+      <div class="alpha-status-row">
+        <div class="alpha-chip"><div class="alpha-chip-val c-blue" id="as-gen">–</div><div class="alpha-chip-label">Generated</div></div>
+        <div class="alpha-chip"><div class="alpha-chip-val c-amber" id="as-sim">–</div><div class="alpha-chip-label">Simulated</div></div>
+        <div class="alpha-chip"><div class="alpha-chip-val c-green" id="as-pass">–</div><div class="alpha-chip-label">Passed Gate</div></div>
+        <div class="alpha-chip"><div class="alpha-chip-val c-red" id="as-fail">–</div><div class="alpha-chip-label">Failed Gate</div></div>
+        <div class="alpha-chip"><div class="alpha-chip-val c-green" id="as-sub">–</div><div class="alpha-chip-label">Submitted</div></div>
+        <div class="alpha-chip"><div class="alpha-chip-val c-amber" id="as-rep">–</div><div class="alpha-chip-label">In Repair</div></div>
+      </div>
+    </div>
+    <div class="box">
+      <div class="box-title">Submitted Alphas</div>
+      <div id="alphas-wrap" style="overflow-x:auto">
+        <table class="data-table">
+          <thead><tr><th>Alpha ID / Expression</th><th>Gate</th><th>Sharpe IS</th><th>Fitness</th><th>Engine</th><th>Time</th></tr></thead>
+          <tbody id="alphas-body"><tr><td colspan="6" style="color:var(--t3);font-family:inherit">Loading…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
   </div>
-</div>
 
-</body>
+  <!-- Knowledge -->
+  <div class="panel" id="panel-knowledge">
+    <div class="box" style="margin-bottom:16px">
+      <div class="box-title">LLM Router — All Providers</div>
+      <div id="knowledge-llm"><div style="font-size:12px;color:var(--t3)">Loading…</div></div>
+    </div>
+    <div class="box">
+      <div class="box-title">Budget Breakdown</div>
+      <div id="knowledge-budget" style="display:flex;gap:32px">
+        <div><div style="font-size:10px;color:var(--t3);margin-bottom:6px;text-transform:uppercase;letter-spacing:.06em">Spent Today</div><div style="font-size:28px;font-weight:700;font-family:'JetBrains Mono',monospace" id="kb-spent">$–</div></div>
+        <div><div style="font-size:10px;color:var(--t3);margin-bottom:6px;text-transform:uppercase;letter-spacing:.06em">Daily Limit</div><div style="font-size:28px;font-weight:700;font-family:'JetBrains Mono',monospace" id="kb-limit">$3.60</div></div>
+        <div><div style="font-size:10px;color:var(--t3);margin-bottom:6px;text-transform:uppercase;letter-spacing:.06em">Remaining</div><div style="font-size:28px;font-weight:700;font-family:'JetBrains Mono',monospace;color:var(--green)" id="kb-rem">$–</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Runs -->
+  <div class="panel" id="panel-runs">
+    <div class="box">
+      <div class="box-title">Recent Runs</div>
+      <div id="runs-wrap" style="overflow-x:auto">
+        <table class="data-table">
+          <thead><tr><th>Run ID</th><th>Status</th><th>Engine</th><th>Submitted</th><th>Best Sharpe</th><th>Started</th></tr></thead>
+          <tbody id="runs-body"><tr><td colspan="6" style="color:var(--t3);font-family:inherit">Loading…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Settings -->
+  <div class="panel" id="panel-settings" style="max-width:520px">
+    <div class="box">
+      <div class="box-title" style="margin-bottom:20px">Scheduler Settings</div>
+      <div class="form-row"><div class="form-label">Enabled</div><select class="form-select" id="s-enabled"><option value="true">Yes</option><option value="false">No</option></select></div>
+      <div class="form-row"><div class="form-label">Mode</div><select class="form-select" id="s-mode"><option value="evaluate">evaluate</option><option value="loop">loop</option><option value="generate">generate</option></select></div>
+      <div class="form-row"><div class="form-label">Interval (minutes)</div><input class="form-input" id="s-interval" type="number" min="15"></div>
+      <div class="form-row"><div class="form-label">Batch Size</div><input class="form-input" id="s-batch" type="number" min="1"></div>
+      <div class="form-row"><div class="form-label">Rounds</div><input class="form-input" id="s-rounds" type="number" min="1"></div>
+      <div class="form-row"><div class="form-label">Objective</div><input class="form-input" id="s-objective" type="text"></div>
+      <button class="save-btn" id="s-save">Save Settings</button>
+      <div style="font-size:12px;color:var(--t3);margin-top:10px;min-height:16px" id="s-status"></div>
+    </div>
+  </div>
+
+</div><!-- /main -->
+
 <script>
 (function(){
-  // Prefer localStorage token (registered users), fall back to server-injected admin token
   const adminToken = document.querySelector('meta[name=dashboard-token]').content;
-  const storedToken = localStorage.getItem('qb_token') ?? '';
+  const storedToken = localStorage.getItem('qb_token') || '';
   const token = storedToken || adminToken;
-
-  // If no token at all, redirect to setup
   if (!token) { location.href = '/setup'; return; }
-
   const h = { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' };
 
-  // Verify token is valid on load; redirect to setup if 401
   fetch('/account', { headers: h }).then(r => {
     if (r.status === 401) { localStorage.removeItem('qb_token'); location.href = '/setup'; }
-  }).catch(() => {});
+  }).catch(function(){});
 
-  // Show username in nav if available
-  const userName = localStorage.getItem('qb_user');
-  const navRight = document.querySelector('.nav-right');
-  if (navRight && userName) {
-    const userBadge = document.createElement('div');
-    userBadge.style.cssText = 'font-size:13px;color:#3a3a3c;font-weight:500;margin-right:12px;display:flex;align-items:center;gap:6px';
-    userBadge.innerHTML = '<span style="width:24px;height:24px;background:#007aff;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;color:#fff;font-size:11px;font-weight:700">' +
-      (userName[0] ?? '?').toUpperCase() + '</span>' + userName;
-    navRight.insertBefore(userBadge, navRight.firstChild);
-  }
+  const userName = localStorage.getItem('qb_user') || 'Admin';
+  const av = document.getElementById('sb-av');
+  const un = document.getElementById('sb-uname');
+  if (av) av.textContent = userName[0].toUpperCase();
+  if (un) un.textContent = userName;
 
-  function esc(s) {
-    return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  }
+  function esc(s) { return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+  function $(id) { return document.getElementById(id); }
 
-  // ── Countdown ──
-  let nextRunAt = null;
+  // Nav tabs
+  const TITLES = { overview:'Overview', pipeline:'Pipeline', alphas:'Alphas', knowledge:'Knowledge', runs:'Runs', settings:'Settings' };
+  document.querySelectorAll('.sb-item').forEach(function(el) {
+    el.addEventListener('click', function() {
+      document.querySelectorAll('.sb-item').forEach(function(x){ x.classList.remove('active'); });
+      document.querySelectorAll('.panel').forEach(function(p){ p.classList.remove('active'); });
+      this.classList.add('active');
+      var tab = this.dataset.tab;
+      var panel = document.getElementById('panel-' + tab);
+      if (panel) panel.classList.add('active');
+      var tt = $('topbar-title');
+      if (tt) tt.textContent = TITLES[tab] || tab;
+      if (tab === 'settings' && !settingsLoaded) loadSettings();
+    });
+  });
+
+  // Countdown
+  var nextRunAt = null;
   function tickCd() {
-    const el = document.querySelector('.cd-time');
-    if (!el) return;
-    if (!nextRunAt) { el.textContent = '–'; return; }
-    const ms = new Date(nextRunAt) - Date.now();
-    if (ms <= 0) { el.textContent = '00:00'; return; }
-    el.textContent = String(Math.floor(ms / 60000)).padStart(2, '0') + ':' +
-                     String(Math.floor((ms % 60000) / 1000)).padStart(2, '0');
+    if (!nextRunAt) return;
+    var ms = new Date(nextRunAt) - Date.now();
+    var fmt = ms > 0
+      ? String(Math.floor(ms/60000)).padStart(2,'0') + ':' + String(Math.floor((ms%60000)/1000)).padStart(2,'0')
+      : '00:00';
+    var el = $('cd-time');
+    var el2 = $('topbar-cd');
+    if (el) el.textContent = fmt;
+    if (el2) el2.textContent = fmt;
   }
   setInterval(tickCd, 1000);
+
   async function fetchSched() {
     try {
-      const r = await fetch('/scheduler', { headers: h });
-      const d = await r.json();
-      nextRunAt = d.nextRunAt ?? null;
-    } catch (e) {}
+      var r = await fetch('/scheduler', { headers: h });
+      var d = await r.json();
+      nextRunAt = d.nextRunAt || null;
+      var sl = $('sched-label');
+      var cs = $('cd-sub');
+      if (sl) sl.textContent = d.enabled ? (d.mode + ' \u00b7 ' + d.engine) : 'Scheduler off';
+      if (cs) cs.textContent = (d.mode || '') + ' \u00b7 ' + (d.engine || '') + ' \u00b7 batch ' + (d.batchSize || '\u2013');
+    } catch(e) {}
   }
   fetchSched();
   setInterval(fetchSched, 30000);
 
-  // ── Poll /runs every 10s ──
+  // Update mining status banner
+  function updateMiningBanner(activeRun) {
+    var banner = $('mining-banner');
+    var ind = $('mining-ind');
+    var lbl = $('mining-label');
+    var task = $('mining-task');
+    var elapsed = $('mining-elapsed');
+    var ctDot = $('ct-dot');
+    var ctText = $('ct-text');
+
+    if (activeRun) {
+      if (banner) { banner.className = 'mining-banner active-mining'; }
+      if (ind) { ind.className = 'mining-indicator active-ind'; }
+      if (lbl) { lbl.className = 'mining-label active-lbl'; lbl.textContent = 'MINING ACTIVE'; }
+      var engine = activeRun.engine || '';
+      var status = activeRun.status || 'running';
+      var currentLlm = activeRun.currentLlm || activeRun.llmProvider || '';
+      var currentTaskName = activeRun.currentTask || activeRun.phase || status;
+      var taskStr = (currentLlm ? currentLlm + ' \u00b7 ' : '') + currentTaskName;
+      if (task) task.textContent = taskStr || ('Engine: ' + engine);
+      if (elapsed && activeRun.startedAt) {
+        var sec = Math.floor((Date.now() - new Date(activeRun.startedAt)) / 1000);
+        var em = Math.floor(sec/60);
+        var es = sec % 60;
+        elapsed.textContent = em + ':' + String(es).padStart(2,'0') + ' elapsed';
+      }
+      if (ctDot) { ctDot.className = 'ct-dot running'; }
+      if (ctText) { ctText.textContent = taskStr || 'Running'; }
+    } else {
+      if (banner) { banner.className = 'mining-banner idle-mining'; }
+      if (ind) { ind.className = 'mining-indicator idle-ind'; }
+      if (lbl) { lbl.className = 'mining-label idle-lbl'; lbl.textContent = 'SYSTEM IDLE'; }
+      if (task) task.textContent = 'No active mining runs';
+      if (elapsed) elapsed.textContent = '';
+      if (ctDot) { ctDot.className = 'ct-dot idle'; }
+      if (ctText) { ctText.textContent = 'Idle'; }
+    }
+  }
+
+  // Main poll
   async function poll() {
     try {
-      const r = await fetch('/runs', { headers: h });
-      const d = await r.json();
-      const al = d.autoLoop ?? {};
-      const lr = d.llmRouterState ?? null;
+      var r = await fetch('/runs', { headers: h });
+      var d = await r.json();
+      var al = d.autoLoop || {};
+      var lr = d.llmRouterState || null;
+      var recent = d.recent || [];
+      var active = d.active || [];
 
-      // Stat cards
-      const sv = document.querySelectorAll('.stat-val');
-      if (sv[0]) sv[0].textContent = al.submitted?.length ?? 0;
-      const recent = d.recent ?? [];
-      const passed = recent.filter(x => x.summary?.passedGate).length;
-      if (sv[1]) sv[1].textContent = recent.length ? Math.round(passed / recent.length * 100) + '%' : '–';
-      if (sv[2] && lr) sv[2].textContent = '$' + (lr.spent_usd ?? 0).toFixed(2) + ' / $' + (lr.daily_budget_usd ?? 3.6).toFixed(2);
+      // Mining banner
+      updateMiningBanner(active[0] || null);
 
-      // ── Pipeline panel ──
-      const activeEl = document.getElementById('pipeline-active');
-      if (activeEl) {
-        const activeRuns = d.active ?? [];
-        if (activeRuns.length) {
-          activeEl.innerHTML = activeRuns.map(r =>
-            '<div style="background:#fff;border-radius:10px;padding:12px 14px;margin-bottom:8px;border:1px solid rgba(0,0,0,0.06)">' +
-            '<div style="font-weight:500;font-size:13px">' + esc(r.runId) + '</div>' +
-            '<div style="font-size:11px;color:#86868b;margin-top:3px">' + esc(r.status) + ' · ' + esc(r.engine ?? '') + '</div>' +
-            '</div>'
-          ).join('');
-        } else {
-          activeEl.textContent = 'No active runs';
-        }
-        // progress log from most recent run
-        const logEl = document.getElementById('pipeline-log');
-        if (logEl) {
-          const recent0 = d.recent?.[0];
-          if (recent0?.progressTail?.length) {
-            logEl.textContent = recent0.progressTail.map(l => l.msg ?? JSON.stringify(l)).join('\\n');
-          } else {
-            logEl.textContent = 'No progress data';
-          }
-        }
-      }
+      // KPIs
+      var ks = $('k-submitted');
+      if (ks) ks.textContent = al.submitted ? al.submitted.length : 0;
+      var passed = recent.filter(function(x){ return x.summary && x.summary.passedGate; }).length;
+      var kg = $('k-gatepass');
+      if (kg) kg.textContent = recent.length ? Math.round(passed/recent.length*100) + '%' : '\u2013';
+      var kr = $('k-repair');
+      if (kr) kr.textContent = al.queueLength != null ? al.queueLength : (al.queue ? al.queue.length : 0);
+      var ksp = $('k-spend');
+      if (ksp && lr) ksp.textContent = '$' + (lr.spent_usd ?? 0).toFixed(2);
+      var ks4 = $('k-sub4');
+      if (ks4 && lr) ks4.textContent = 'of $' + (lr.daily_budget_usd ?? 3.6).toFixed(2) + ' limit';
 
-      // ── Knowledge panel ──
-      const kllm = document.getElementById('knowledge-llm');
-      if (kllm && lr?.providers) {
-        kllm.innerHTML = '<table style="width:100%;border-collapse:collapse;font-size:12px">' +
-          '<tr style="color:#86868b;border-bottom:1px solid #e5e5ea"><th style="text-align:left;padding:6px 8px">Provider</th><th style="padding:6px 8px">Role</th><th style="padding:6px 8px">Win Rate</th><th style="padding:6px 8px">Calls</th><th style="padding:6px 8px">Wins</th></tr>' +
-          Object.entries(lr.providers).map(([n, p]) => {
-            const wr = ((p.win_rate ?? 0.5) * 100).toFixed(1);
-            const col = (p.win_rate ?? 0.5) >= 0.5 ? '#34c759' : '#ff9f0a';
-            return '<tr style="border-bottom:1px solid #f2f2f7">' +
-              '<td style="padding:8px;font-weight:500">' + esc(n) + '</td>' +
-              '<td style="padding:8px;text-align:center;color:#86868b">' + esc(p.role ?? '–') + '</td>' +
-              '<td style="padding:8px;text-align:center;color:' + col + ';font-weight:600">' + wr + '%</td>' +
-              '<td style="padding:8px;text-align:center">' + (p.calls ?? 0) + '</td>' +
-              '<td style="padding:8px;text-align:center">' + (p.wins ?? 0) + '</td>' +
-              '</tr>';
-          }).join('') + '</table>';
-        const kb = document.getElementById('knowledge-budget');
-        if (kb) kb.innerHTML =
-          '<div style="display:flex;gap:24px">' +
-          '<div><div style="font-size:11px;color:#86868b;margin-bottom:4px">Spent Today</div><div style="font-size:20px;font-weight:600">$' + (lr.spent_usd ?? 0).toFixed(3) + '</div></div>' +
-          '<div><div style="font-size:11px;color:#86868b;margin-bottom:4px">Daily Budget</div><div style="font-size:20px;font-weight:600">$' + (lr.daily_budget_usd ?? 3.6).toFixed(2) + '</div></div>' +
-          '<div><div style="font-size:11px;color:#86868b;margin-bottom:4px">Remaining</div><div style="font-size:20px;font-weight:600;color:#34c759">$' + Math.max(0, (lr.daily_budget_usd ?? 3.6) - (lr.spent_usd ?? 0)).toFixed(3) + '</div></div>' +
-          '</div>';
-      }
-
-      // ── Runs panel ──
-      const rl2 = document.getElementById('runs-list');
-      if (rl2) {
-        const runs = d.recent ?? [];
-        if (runs.length) {
-          rl2.innerHTML = '<table style="width:100%;border-collapse:collapse;font-size:12px">' +
-            '<tr style="color:#86868b;border-bottom:1px solid #e5e5ea"><th style="text-align:left;padding:6px 8px">Run ID</th><th style="padding:6px 8px">Status</th><th style="padding:6px 8px">Engine</th><th style="padding:6px 8px">Submitted</th><th style="padding:6px 8px">Sharpe</th></tr>' +
-            runs.slice(0, 20).map(r => {
-              const s = r.state ?? {};
-              const sum = r.summary ?? {};
-              const statusCol = s.status === 'completed' ? '#34c759' : s.status === 'running' ? '#007aff' : '#86868b';
-              return '<tr style="border-bottom:1px solid #f2f2f7">' +
-                '<td style="padding:8px;font-family:monospace;font-size:11px">' + esc(r.runId?.slice(-12) ?? '–') + '</td>' +
-                '<td style="padding:8px;text-align:center;color:' + statusCol + '">' + esc(s.status ?? '–') + '</td>' +
-                '<td style="padding:8px;text-align:center;color:#86868b">' + esc(s.engine ?? '–') + '</td>' +
-                '<td style="padding:8px;text-align:center">' + (sum.submitted ?? '–') + '</td>' +
-                '<td style="padding:8px;text-align:center">' + (sum.bestSharpe != null ? sum.bestSharpe.toFixed(2) : '–') + '</td>' +
-                '</tr>';
-            }).join('') + '</table>';
-        } else {
-          rl2.textContent = 'No runs found';
-        }
-      }
+      // Pipeline stages from active run
+      var activeRun = active[0] || null;
+      var prog = (activeRun && activeRun.stageCounts) ? activeRun.stageCounts : {};
+      var stageMap = { gen: prog.generated ?? prog.gen, val: prog.validated ?? prog.val, sim: prog.simulated ?? prog.sim, gate: prog.gated ?? prog.gate, sub: prog.submitted ?? prog.sub };
+      Object.keys(stageMap).forEach(function(s) {
+        var el = $(('ps-' + s));
+        if (el) el.textContent = stageMap[s] != null ? stageMap[s] : '0';
+      });
 
       // LLM rows
-      const ll = document.querySelector('.llm-list');
-      if (ll && lr?.providers) {
-        ll.innerHTML = Object.entries(lr.providers).slice(0, 4).map(([n, p]) => {
-          const wr = ((p.win_rate ?? 0.5) * 100).toFixed(0);
-          const col = (p.win_rate ?? 0.5) >= 0.5 ? '#34c759' : '#ff9f0a';
+      var ll = $('llm-list');
+      if (ll && lr && lr.providers) {
+        var entries = Object.entries(lr.providers).slice(0, 5);
+        var activeLlm = activeRun ? (activeRun.currentLlm || activeRun.llmProvider || '') : '';
+        ll.innerHTML = entries.map(function(kv) {
+          var n = kv[0]; var p = kv[1];
+          var wr = ((p.win_rate ?? 0.5) * 100).toFixed(0);
+          var col = (p.win_rate ?? 0.5) >= 0.5 ? 'var(--green)' : 'var(--amber)';
+          var activeBadge = (activeLlm && n.toLowerCase().indexOf(activeLlm.toLowerCase()) >= 0) ? '<span class="llm-active-badge">ACTIVE</span>' : '';
           return '<div>' +
-            '<div class="llm-header">' +
-              '<div><span class="llm-name">' + esc(n) + '</span>' +
-              '<span class="llm-role-tag">' + esc(p.role ?? '') + ' · ' + wr + '%</span></div>' +
-              '<div class="llm-rate" style="color:' + col + '">' + wr + '% pass</div>' +
-            '</div>' +
-            '<div class="bar-track"><div class="bar-fill" style="background:' + col + ';width:' + wr + '%"></div></div>' +
-          '</div>';
-        }).join('');
+            '<div class="llm-row-head"><div><span class="llm-name">' + esc(n) + '</span><span class="llm-tag">' + esc(p.role || '') + '</span>' + activeBadge + '</div>' +
+            '<span class="llm-rate" style="color:' + col + '">' + wr + '%</span></div>' +
+            '<div class="bar-track"><div class="bar-fill" style="width:' + wr + '%;background:' + col + '"></div></div>' +
+            '</div>';
+        }).join('<div style="height:12px"></div>');
       }
 
       // Repair queue
-      const rl = document.querySelector('.repair-list');
+      var rl = $('repair-list');
       if (rl) {
-        const q = al.queue?.slice(0, 3) ?? [];
+        var q = (al.queue || []).slice(0,4);
         rl.innerHTML = q.length
-          ? q.map(x => '<div class="repair-row"><div class="r-expr">' + esc(x.expression) + '</div>' +
-              '<div class="r-tag">' + esc(x.reason) + '</div>' +
-              '<div class="r-depth">' + esc(x.depth) + '</div></div>').join('')
-          : '<div class="repair-row"><div class="r-expr" style="color:#86868b">Queue empty</div></div>';
+          ? q.map(function(x){ return '<div class="queue-row"><div class="q-expr">' + esc(x.expression || '\u2013') + '</div><div class="q-tag">' + esc(x.reason || '\u2013') + '</div><div class="q-depth">' + esc(x.depth || '\u2013') + '</div></div>'; }).join('')
+          : '<div style="font-size:12px;color:var(--t3)">Queue empty</div>';
       }
 
-      // Activity feed
-      const af = document.querySelector('.activity-feed');
+      // Activity
+      var af = $('act-list');
       if (af) {
-        const ev = (al.events ?? []).slice(0, 4);
+        var ev = (al.events || []).slice(0, 5);
         af.innerHTML = ev.length
-          ? ev.map(e => {
-              const cls = e.type === 'submitted' ? 'submit' : e.type === 'repair' ? 'repair' : 'fail';
-              const icon = e.type === 'submitted' ? '↑' : e.type === 'repair' ? '⟳' : '✕';
-              return '<div class="act-item">' +
-                '<div class="act-icon ' + cls + '">' + icon + '</div>' +
-                '<div class="act-body">' +
-                  '<div class="act-expr">' + esc(e.alphaId ?? e.expression ?? '–') + '</div>' +
-                  '<div class="act-meta">' + esc(e.message ?? e.type ?? '') + '</div>' +
-                '</div></div>';
+          ? ev.map(function(e) {
+              var cls = e.type==='submitted'?'s':e.type==='repair'?'r':'f';
+              var icon = e.type==='submitted'?'\u2191':e.type==='repair'?'\u27f3':'\u2715';
+              return '<div class="act-row"><div class="act-dot ' + cls + '">' + icon + '</div><div style="flex:1;min-width:0"><div class="act-expr">' + esc(e.alphaId || e.expression || '\u2013') + '</div><div class="act-meta">' + esc(e.message || e.type || '') + '</div></div></div>';
             }).join('')
-          : '<div class="act-item"><div class="act-body"><div class="act-meta" style="color:#86868b">No recent activity</div></div></div>';
+          : '<div style="font-size:12px;color:var(--t3)">No recent activity</div>';
       }
-    } catch (e) {}
+
+      // Pipeline panel
+      var pa = $('pipeline-active');
+      if (pa) {
+        pa.innerHTML = active.length
+          ? active.map(function(x){ return '<div style="background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:12px 14px;margin-bottom:8px"><div style="font-family:\'JetBrains Mono\',monospace;font-size:12px;color:var(--t1)">' + esc(x.runId || '\u2013') + '</div><div style="font-size:11px;color:var(--t3);margin-top:4px">' + esc(x.status || '\u2013') + ' \u00b7 ' + esc(x.engine || '\u2013') + '</div></div>'; }).join('')
+          : '<div style="font-size:12px;color:var(--t3)">No active runs</div>';
+        var pl = $('pipeline-log');
+        if (pl) {
+          var progArr = (recent[0] && recent[0].progressTail) ? recent[0].progressTail : [];
+          pl.textContent = progArr.map(function(l){ return l.msg || JSON.stringify(l); }).join('\n') || 'No progress data';
+        }
+      }
+
+      // Alphas panel
+      var totalGen = 0, totalSim = 0, totalPass = 0, totalFail = 0, totalSub = 0;
+      var totalRep = al.queue ? al.queue.length : (al.queueLength || 0);
+      recent.forEach(function(x) {
+        var sum = x.summary || {};
+        totalGen += (sum.generated || 0);
+        totalSim += (sum.simulated || 0);
+        if (sum.passedGate) totalPass++;
+        else if (sum.status === 'completed') totalFail++;
+        totalSub += (sum.submitted || 0);
+      });
+      var setAl = function(id, v) { var el = $(id); if (el) el.textContent = v != null ? v : '\u2013'; };
+      setAl('as-gen', totalGen || '\u2013');
+      setAl('as-sim', totalSim || '\u2013');
+      setAl('as-pass', totalPass || '\u2013');
+      setAl('as-fail', totalFail || '\u2013');
+      setAl('as-sub', totalSub || '\u2013');
+      setAl('as-rep', totalRep || '\u2013');
+
+      var ab = $('alphas-body');
+      if (ab) {
+        var submittedAlphas = recent.filter(function(x){ return x.summary && x.summary.submitted > 0; });
+        ab.innerHTML = submittedAlphas.length
+          ? submittedAlphas.slice(0,20).map(function(x) {
+              var s = x.state || {};
+              var sum = x.summary || {};
+              var gateCls = sum.passedGate ? 'pass' : 'no';
+              var gateText = sum.passedGate ? 'PASS' : (s.status === 'completed' ? 'FAIL' : '\u2013');
+              return '<tr><td style="color:var(--t1)">' + esc((x.runId||'').slice(0,14)) + '</td><td><span class="badge ' + gateCls + '">' + gateText + '</span></td><td>' + (sum.bestSharpe != null ? sum.bestSharpe.toFixed(3) : '\u2013') + '</td><td>' + (sum.fitness != null ? sum.fitness.toFixed(2) : '\u2013') + '</td><td>' + esc(s.engine || '\u2013') + '</td><td>' + esc(s.startedAt ? new Date(s.startedAt).toLocaleTimeString() : '\u2013') + '</td></tr>';
+            }).join('')
+          : '<tr><td colspan="6" style="color:var(--t3);font-family:inherit">No submitted alphas yet</td></tr>';
+      }
+
+      // Knowledge panel
+      var kl = $('knowledge-llm');
+      if (kl && lr && lr.providers) {
+        kl.innerHTML = '<table class="data-table"><thead><tr><th>Provider</th><th>Role</th><th>Win Rate</th><th>Calls</th><th>Wins</th></tr></thead><tbody>' +
+          Object.entries(lr.providers).map(function(kv) {
+            var n = kv[0]; var p = kv[1];
+            var wr = ((p.win_rate ?? 0.5)*100).toFixed(1);
+            var col = (p.win_rate ?? 0.5) >= 0.5 ? 'var(--green)' : 'var(--amber)';
+            return '<tr><td style="color:var(--t1);font-weight:500">' + esc(n) + '</td><td>' + esc(p.role || '\u2013') + '</td><td style="color:' + col + ';font-weight:600">' + wr + '%</td><td>' + (p.calls || 0) + '</td><td>' + (p.wins || 0) + '</td></tr>';
+          }).join('') + '</tbody></table>';
+        var sp = lr.spent_usd ?? 0;
+        var bud = lr.daily_budget_usd ?? 3.6;
+        var ks2 = $('kb-spent'); if (ks2) ks2.textContent = '$' + sp.toFixed(3);
+        var kl2 = $('kb-limit'); if (kl2) kl2.textContent = '$' + bud.toFixed(2);
+        var kr2 = $('kb-rem'); if (kr2) kr2.textContent = '$' + Math.max(0,bud-sp).toFixed(3);
+      }
+
+      // Runs panel
+      var rb = $('runs-body');
+      if (rb) {
+        rb.innerHTML = recent.slice(0,20).map(function(x) {
+          var s = x.state || {};
+          var sum = x.summary || {};
+          var cls = s.status==='running'?'run':s.status==='completed'?'done':'fail';
+          var dt = x.runId ? x.runId.slice(0,12) : '\u2013';
+          return '<tr><td>' + esc(dt) + '</td><td><span class="badge ' + cls + '">' + esc(s.status || '\u2013') + '</span></td><td>' + esc(s.engine || '\u2013') + '</td><td>' + (sum.submitted ?? '\u2013') + '</td><td>' + (sum.bestSharpe != null ? sum.bestSharpe.toFixed(2) : '\u2013') + '</td><td>' + esc(s.startedAt ? new Date(s.startedAt).toLocaleTimeString() : '\u2013') + '</td></tr>';
+        }).join('') || '<tr><td colspan="6" style="color:var(--t3);font-family:inherit">No runs found</td></tr>';
+      }
+
+    } catch(e) {}
   }
   poll();
   setInterval(poll, 10000);
 
-  // ── Nav tabs ──
-  function showPanel(tab) {
-    document.querySelectorAll('.panel').forEach(p => p.style.display = 'none');
-    const el = document.getElementById('panel-' + tab);
-    if (el) el.style.display = tab === 'overview' ? 'flex' : 'flex';
-  }
-  document.querySelectorAll('.nav-link').forEach(a => a.addEventListener('click', function(e) {
-    e.preventDefault();
-    document.querySelectorAll('.nav-link').forEach(x => x.classList.remove('active'));
-    this.classList.add('active');
-    showPanel(this.dataset.tab ?? 'overview');
-  }));
-
-  // ── Settings panel load + save ──
-  let settingsLoaded = false;
+  // Settings
+  var settingsLoaded = false;
   async function loadSettings() {
-    if (settingsLoaded) return;
     try {
-      const r = await fetch('/scheduler', { headers: h });
-      const d = await r.json();
-      const g = id => document.getElementById(id);
-      if (g('s-enabled')) g('s-enabled').value = String(d.enabled ?? false);
-      if (g('s-mode')) g('s-mode').value = d.mode ?? 'evaluate';
-      if (g('s-interval')) g('s-interval').value = d.intervalMinutes ?? 60;
-      if (g('s-batch')) g('s-batch').value = d.batchSize ?? 5;
-      if (g('s-rounds')) g('s-rounds').value = d.rounds ?? 3;
-      if (g('s-objective')) g('s-objective').value = d.objective ?? '';
+      var r = await fetch('/scheduler', { headers: h });
+      var d = await r.json();
+      if ($('s-enabled')) $('s-enabled').value = String(d.enabled ?? false);
+      if ($('s-mode')) $('s-mode').value = d.mode || 'evaluate';
+      if ($('s-interval')) $('s-interval').value = d.intervalMinutes || 60;
+      if ($('s-batch')) $('s-batch').value = d.batchSize || 5;
+      if ($('s-rounds')) $('s-rounds').value = d.rounds || 3;
+      if ($('s-objective')) $('s-objective').value = d.objective || '';
       settingsLoaded = true;
-    } catch (e) {}
+    } catch(e) {}
   }
-  document.getElementById('s-save')?.addEventListener('click', async function() {
-    const g = id => document.getElementById(id);
-    const st = document.getElementById('s-status');
-    this.disabled = true; this.textContent = 'Saving…';
+  var saveBtn = $('s-save');
+  if (saveBtn) saveBtn.addEventListener('click', async function() {
+    var st = $('s-status');
+    this.disabled = true; this.textContent = 'Saving\u2026';
     try {
-      const body = {
-        enabled: g('s-enabled')?.value === 'true',
-        mode: g('s-mode')?.value,
-        intervalMinutes: Number(g('s-interval')?.value),
-        batchSize: Number(g('s-batch')?.value),
-        rounds: Number(g('s-rounds')?.value),
-        objective: g('s-objective')?.value?.trim(),
+      var body = {
+        enabled: $('s-enabled') ? $('s-enabled').value === 'true' : false,
+        mode: $('s-mode') ? $('s-mode').value : 'evaluate',
+        intervalMinutes: Number($('s-interval') ? $('s-interval').value : 60),
+        batchSize: Number($('s-batch') ? $('s-batch').value : 5),
+        rounds: Number($('s-rounds') ? $('s-rounds').value : 3),
+        objective: $('s-objective') ? ($('s-objective').value || '').trim() : ''
       };
-      const r = await fetch('/scheduler', { method: 'POST', headers: h, body: JSON.stringify(body) });
-      if (r.ok) { if (st) st.textContent = 'Saved ✓'; }
-      else { if (st) st.textContent = 'Error: ' + r.status; }
-    } catch (e) { if (st) st.textContent = 'Error: ' + e.message; }
+      var r = await fetch('/scheduler', { method:'POST', headers: h, body: JSON.stringify(body) });
+      if (st) st.textContent = r.ok ? 'Saved \u2713' : 'Error ' + r.status;
+    } catch(e) { if (st) st.textContent = 'Error: ' + e.message; }
     this.disabled = false; this.textContent = 'Save Settings';
-    setTimeout(() => { if (st) st.textContent = ''; }, 3000);
-  });
-  // Load settings when user clicks the tab
-  document.querySelectorAll('.nav-link').forEach(a => {
-    if (a.dataset.tab === 'settings') a.addEventListener('click', loadSettings);
+    setTimeout(function(){ if (st) st.textContent = ''; }, 3000);
   });
 
-  // ── Optimize & Run button ──
-  const btn = document.querySelector('.run-btn');
-  if (btn) {
-    const statusEl = document.createElement('div');
-    statusEl.style.cssText = 'font-size:12px;color:#86868b;margin-top:8px;min-height:16px;';
-    btn.parentNode.insertBefore(statusEl, btn.nextSibling);
-
-    btn.addEventListener('click', async function() {
-      const idea = document.querySelector('.idea-field')?.value?.trim();
-      if (!idea) { statusEl.textContent = 'Please enter an idea'; return; }
-      btn.disabled = true;
-      btn.textContent = 'Optimizing…';
-      statusEl.textContent = '';
-      try {
-        const or = await fetch('/ideas/optimize', { method: 'POST', headers: h, body: JSON.stringify({ idea }) });
-        const od = await or.json();
-        statusEl.textContent = 'Direction: ' + esc(od.direction ?? od.target_family ?? '');
-        btn.textContent = 'Starting run…';
-        const rr = await fetch('/runs', { method: 'POST', headers: h, body: JSON.stringify({ force: false }) });
-        if (rr.status === 409) {
-          statusEl.textContent = 'Run already active';
-          btn.disabled = false;
-          btn.textContent = 'Optimize & Run';
-          return;
-        }
-        btn.textContent = 'Run Started ✓';
-        setTimeout(() => { btn.disabled = false; btn.textContent = 'Optimize & Run'; }, 3000);
-      } catch (e) {
-        statusEl.textContent = 'Error: ' + e.message;
-        btn.disabled = false;
-        btn.textContent = 'Optimize & Run';
-      }
-    });
-  }
+  // Run button
+  var btn = $('run-btn');
+  var runSt = $('run-status');
+  if (btn) btn.addEventListener('click', async function() {
+    var ideaEl = $('idea-field');
+    var idea = ideaEl ? ideaEl.value.trim() : '';
+    if (!idea) { if (runSt) runSt.textContent = 'Please enter an idea'; return; }
+    btn.disabled = true; btn.textContent = 'Optimizing\u2026'; if (runSt) runSt.textContent = '';
+    try {
+      var or = await fetch('/ideas/optimize', { method:'POST', headers: h, body: JSON.stringify({ idea: idea }) });
+      var od = await or.json();
+      if (runSt) runSt.textContent = 'Direction: ' + esc(od.direction || od.target_family || '');
+      btn.textContent = 'Starting run\u2026';
+      var rr = await fetch('/runs', { method:'POST', headers: h, body: JSON.stringify({ force: false }) });
+      if (rr.status === 409) { if (runSt) runSt.textContent = 'Run already active'; btn.disabled=false; btn.textContent='Optimize & Run'; return; }
+      btn.textContent = 'Run Started \u2713';
+      setTimeout(function(){ btn.disabled=false; btn.textContent='Optimize & Run'; }, 3000);
+    } catch(e) { if (runSt) runSt.textContent='Error: '+e.message; btn.disabled=false; btn.textContent='Optimize & Run'; }
+  });
 })();
 </script>
+</body>
 </html>
 `;
 }
