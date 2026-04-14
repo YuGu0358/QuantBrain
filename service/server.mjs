@@ -1571,15 +1571,15 @@ function runningRuns(authContext = null) {
   });
 }
 
-const USER_REGISTRY_PATH = path.resolve(CREDENTIALS_DIR, "user-registry.json");
-
 async function loadUserRegistry() {
-  const data = await maybeReadJson(USER_REGISTRY_PATH);
+  const registryPath = path.resolve(CREDENTIALS_DIR, "user-registry.json");
+  const data = await maybeReadJson(registryPath);
   return Array.isArray(data) ? data : [];
 }
 
 async function saveUserRegistry(registry) {
-  await writeFile(USER_REGISTRY_PATH, JSON.stringify(registry, null, 2) + "\n", { mode: 0o600 });
+  const registryPath = path.resolve(CREDENTIALS_DIR, "user-registry.json");
+  await writeFile(registryPath, JSON.stringify(registry, null, 2) + "\n", { mode: 0o600 });
 }
 
 async function registerUser(body) {
