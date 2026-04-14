@@ -2089,17 +2089,32 @@ async function readRunProgressStats(outputDir) {
     const text = await readFile(path.join(outputDir, "progress.jsonl"), "utf8");
     const lines = text.trim().split(/\r?\n/).filter(Boolean);
     let nGen = 0, nSim = 0, nGate = 0;
+    const recentEvents = [];
     for (const line of lines) {
       const e = safeJson(line);
       if (!e) continue;
       if (e.stage === "evaluated") nSim++;
       if (e.stage === "rejected") nGen++;
+      // Build human-readable log line for dashboard
+      const at = e.at ? String(e.at).slice(11, 19) : "";
+      let msg = "";
+      if (e.stage === "started") msg = `启动 mode=${e.mode ?? ""} engine=python-v2`;
+      else if (e.stage === "submitted") msg = `提交仿真 ${e.expression ? e.expression.slice(0, 60) : ""}`;
+      else if (e.stage === "backtest_completed") msg = `回测完成 alpha_id=${e.alpha_id ?? "?"} sharpe=${e.sharpe ?? "?"}`;
+      else if (e.stage === "mock_backtest") msg = `模拟回测 sharpe=${e.sharpe ?? "?"}`;
+      else if (e.stage === "evaluated") msg = `已评估 ${e.candidate_id ?? ""} status=${e.status ?? ""}`;
+      else if (e.stage === "rejected") msg = `验证拒绝 ${e.candidate_id ?? ""} ${(e.errors ?? []).slice(0,2).join("; ")}`;
+      else if (e.stage === "blocked") msg = `⚠️ 阻塞: ${e.reason ?? ""}`;
+      else if (e.stage === "waiting") msg = `⏳ 等待配额: ${e.reason ?? ""}`;
+      else if (e.stage === "finished") msg = `完成 gen=${e.summary?.generatedCandidates ?? 0} sim=${e.summary?.total_brain_simulations ?? 0}`;
+      else msg = `${e.stage}`;
+      if (msg) recentEvents.push(`${at} ${msg}`);
     }
     nGen += nSim; // total generated = simulated + rejected
     // pick up qualified count from pool.json if already written
     const pool = await maybeReadJson(path.join(outputDir, "pool.json"));
     if (pool) nGate = pool.qualified ?? 0;
-    return { nGen, nSim, nGate };
+    return { nGen, nSim, nGate, recentEvents: recentEvents.slice(-30) };
   } catch {
     return null;
   }
@@ -2979,6 +2994,10 @@ body{display:flex}
         var pl = $('pipeline-log');
         if (pl) {
           var logLines = runLogs.slice(-60).map(function(l){ return (l.at ? l.at.slice(11,19) : '') + ' ' + (l.line || ''); });
+          // For python-v2: fall back to progress.jsonl events when stdout logs are empty
+          if (!logLines.length && activeRun && activeRun.progressStats && activeRun.progressStats.recentEvents) {
+            logLines = activeRun.progressStats.recentEvents;
+          }
           pl.textContent = logLines.join('\\n') || '暂无进度数据';
         }
       }
