@@ -1267,7 +1267,10 @@ async function handleRunFinished(runState) {
   const candidates = await loadRunScoredCandidates(runState.outputDir);
   const submitted = await tryAutoSubmitCandidates(candidates, runState.runId, runState.ownerId);
   if (submitted) {
-    if (runState.source === "repair") await clearActiveRepair(runState.runId);
+    if (runState.source === "repair") {
+      pushRepairHistory({ alphaId: runState.parentAlphaId, expression: autoLoopState.activeRepair?.expression ?? null, failedChecks: autoLoopState.activeRepair?.failedChecks ?? [], repairDepth: runState.repairDepth ?? 0, outcome: "submitted", runId: runState.runId });
+      await clearActiveRepair(runState.runId);
+    }
     await startNextAutoRepairRun();
     return;
   }
@@ -1292,8 +1295,15 @@ async function handleRunFinished(runState) {
         _category: candidate._category ?? null,
       });
     }
+    if (runState.source === "repair") {
+      const outcome = repairDepth >= AUTO_REPAIR_MAX_ROUNDS ? "max-depth" : "re-queued";
+      pushRepairHistory({ alphaId: runState.parentAlphaId, expression: autoLoopState.activeRepair?.expression ?? null, failedChecks: autoLoopState.activeRepair?.failedChecks ?? [], repairDepth: runState.repairDepth ?? 0, outcome, runId: runState.runId });
+    }
   } else {
     pushAutoLoopEvent({ type: "no-repair-candidate", runId: runState.runId, ownerId: runState.ownerId });
+    if (runState.source === "repair") {
+      pushRepairHistory({ alphaId: runState.parentAlphaId, expression: autoLoopState.activeRepair?.expression ?? null, failedChecks: autoLoopState.activeRepair?.failedChecks ?? [], repairDepth: runState.repairDepth ?? 0, outcome: "no-candidate", runId: runState.runId });
+    }
   }
 
   if (runState.source === "repair") await clearActiveRepair(runState.runId);
@@ -1639,10 +1649,11 @@ function publicAutoLoopState(authContext = systemAuthContext()) {
     maxRepairRounds: AUTO_REPAIR_MAX_ROUNDS,
     repairBatchSize: AUTO_REPAIR_BATCH_SIZE,
     queueLength: queue.length,
-    queue: queue.slice(0, 10),
+    queue: queue.slice(0, 20),
     activeRepair,
     submitted: submitted.slice(-10).reverse(),
     events: events.slice(-30).reverse(),
+    repairHistory: (autoLoopState.repairHistory ?? []).slice(-20).reverse(),
     diversityStats: autoLoopState.diversityStats ?? null,
     lastAction: autoLoopState.lastAction,
     statePath: AUTO_LOOP_STATE_PATH,
@@ -1656,9 +1667,15 @@ async function loadAutoLoopState() {
     activeRepair: null,
     submitted: Array.isArray(persisted?.submitted) ? persisted.submitted : [],
     events: Array.isArray(persisted?.events) ? persisted.events.slice(-100) : [],
+    repairHistory: Array.isArray(persisted?.repairHistory) ? persisted.repairHistory.slice(-50) : [],
     diversityStats: persisted?.diversityStats ?? null,
     lastAction: persisted?.lastAction ?? null,
   };
+}
+
+function pushRepairHistory(entry) {
+  autoLoopState.repairHistory.push({ ...entry, completedAt: new Date().toISOString() });
+  autoLoopState.repairHistory = autoLoopState.repairHistory.slice(-50);
 }
 
 async function saveAutoLoopState() {
@@ -2732,6 +2749,7 @@ body{display:flex}
     <div class="sb-item" data-tab="pipeline"><span class="sb-icon">◈</span>流水线</div>
     <div class="sb-item" data-tab="alphas"><span class="sb-icon">◆</span>因子</div>
     <div class="sb-item" data-tab="library"><span class="sb-icon">▣</span>因子库</div>
+    <div class="sb-item" data-tab="repair"><span class="sb-icon">⟳</span>修复工作区</div>
     <div class="sb-item" data-tab="knowledge"><span class="sb-icon">◎</span>知识库</div>
     <div class="sb-item" data-tab="runs"><span class="sb-icon">≡</span>运行记录</div>
     <div class="sb-item" data-tab="settings"><span class="sb-icon">⚙</span>设置</div>
@@ -2913,6 +2931,38 @@ body{display:flex}
     </div>
   </div>
 
+  <!-- Repair Workspace -->
+  <div class="panel" id="panel-repair">
+    <div class="kpi-row" style="margin-bottom:16px">
+      <div class="kpi"><div class="kpi-label">队列中</div><div class="kpi-val" id="rp-queue">–</div></div>
+      <div class="kpi"><div class="kpi-label">正在修复</div><div class="kpi-val" id="rp-active">–</div></div>
+      <div class="kpi"><div class="kpi-label">已完成</div><div class="kpi-val" id="rp-done">–</div></div>
+      <div class="kpi"><div class="kpi-label">修复成功率</div><div class="kpi-val" id="rp-rate">–</div></div>
+    </div>
+    <div class="box" style="margin-bottom:16px" id="rp-active-box">
+      <div class="box-title">当前修复任务</div>
+      <div id="rp-active-card"><div style="font-size:12px;color:var(--t3)">当前无修复任务</div></div>
+    </div>
+    <div class="box" style="margin-bottom:16px">
+      <div class="box-title">修复队列</div>
+      <div style="overflow-x:auto">
+        <table class="data-table">
+          <thead><tr><th>#</th><th>Alpha ID</th><th>表达式</th><th>失败检查</th><th>深度</th><th>入队时间</th></tr></thead>
+          <tbody id="rp-queue-body"><tr><td colspan="6" style="color:var(--t3);font-family:inherit">加载中…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="box">
+      <div class="box-title">修复历史</div>
+      <div style="overflow-x:auto">
+        <table class="data-table">
+          <thead><tr><th>Alpha ID</th><th>表达式</th><th>失败检查</th><th>深度</th><th>结果</th><th>完成时间</th></tr></thead>
+          <tbody id="rp-history-body"><tr><td colspan="6" style="color:var(--t3);font-family:inherit">暂无记录</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
   <!-- Knowledge -->
   <div class="panel" id="panel-knowledge">
     <div class="box" style="margin-bottom:16px">
@@ -2995,7 +3045,7 @@ body{display:flex}
   function $(id) { return document.getElementById(id); }
 
   // Nav tabs
-  const TITLES = { overview:'总览', pipeline:'流水线', alphas:'因子', library:'因子库', knowledge:'知识库', runs:'运行记录', settings:'设置' };
+  const TITLES = { overview:'总览', pipeline:'流水线', alphas:'因子', library:'因子库', repair:'修复工作区', knowledge:'知识库', runs:'运行记录', settings:'设置' };
   document.querySelectorAll('.sb-item').forEach(function(el) {
     el.addEventListener('click', function() {
       document.querySelectorAll('.sb-item').forEach(function(x){ x.classList.remove('active'); });
@@ -3270,13 +3320,67 @@ body{display:flex}
         }).join('<div style="height:12px"></div>');
       }
 
-      // Repair queue
+      // Repair queue (overview panel mini list)
       var rl = $('repair-list');
       if (rl) {
         var q = (al.queue || []).slice(0,4);
         rl.innerHTML = q.length
-          ? q.map(function(x){ return '<div class="queue-row"><div class="q-expr">' + esc(x.expression || '\u2013') + '</div><div class="q-tag">' + esc(x.reason || '\u2013') + '</div><div class="q-depth">' + esc(x.depth || '\u2013') + '</div></div>'; }).join('')
+          ? q.map(function(x){ return '<div class="queue-row"><div class="q-expr">' + esc(x.expression || '\u2013') + '</div><div class="q-tag">' + esc((x.failedChecks||[]).join(', ') || '\u2013') + '</div><div class="q-depth">D' + esc(x.repairDepth ?? 0) + '</div></div>'; }).join('')
           : '<div style="font-size:12px;color:var(--t3)">队列为空</div>';
+      }
+
+      // Repair workspace panel
+      var rHistory = al.repairHistory || [];
+      var rQueue = al.queue || [];
+      var rActive = al.activeRepair || null;
+      var rDone = rHistory.length;
+      var rSuccess = rHistory.filter(function(h){return h.outcome==='submitted';}).length;
+      var $rpQ = $('rp-queue'); if ($rpQ) $rpQ.textContent = rQueue.length + (rActive ? ' (+1 运行中)' : '');
+      var $rpA = $('rp-active'); if ($rpA) $rpA.textContent = rActive ? '运行中' : '空闲';
+      var $rpD = $('rp-done'); if ($rpD) $rpD.textContent = rDone;
+      var $rpR = $('rp-rate'); if ($rpR) $rpR.textContent = rDone ? Math.round(rSuccess/rDone*100) + '%' : '–';
+      // Active repair card
+      var $ac = $('rp-active-card');
+      if ($ac) {
+        if (rActive) {
+          var acChecks = (rActive.failedChecks||[]).map(function(c){return '<span style="background:rgba(239,68,68,.15);color:var(--red);border:1px solid rgba(239,68,68,.3);padding:2px 7px;border-radius:4px;font-size:11px;font-weight:600">' + esc(c) + '</span>';}).join(' ');
+          $ac.innerHTML = '<div style="display:flex;flex-direction:column;gap:10px">' +
+            '<div style="display:flex;align-items:center;gap:8px"><div style="width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 6px var(--green)"></div><span style="font-size:12px;font-weight:600;color:var(--green)">正在修复</span><span style="font-size:11px;color:var(--t3)">深度 D' + (rActive.repairDepth||0) + '</span></div>' +
+            '<div style="font-size:11px;color:var(--t3)">Alpha ID</div><div style="font-family:\'JetBrains Mono\',monospace;font-size:12px;color:var(--t1)">' + esc(rActive.parentAlphaId||'–') + '</div>' +
+            '<div style="font-size:11px;color:var(--t3)">原始表达式</div><div style="font-family:\'JetBrains Mono\',monospace;font-size:11px;color:var(--t2);word-break:break-all;background:var(--card2);border:1px solid var(--border);border-radius:6px;padding:8px">' + esc(rActive.expression||'–') + '</div>' +
+            '<div style="font-size:11px;color:var(--t3)">失败检查</div><div style="display:flex;flex-wrap:wrap;gap:6px">' + (acChecks||'<span style="color:var(--t3);font-size:12px">–</span>') + '</div>' +
+            '</div>';
+        } else {
+          $ac.innerHTML = '<div style="font-size:12px;color:var(--t3)">当前无修复任务</div>';
+        }
+      }
+      // Queue table
+      var $rqb = $('rp-queue-body');
+      if ($rqb) {
+        $rqb.innerHTML = rQueue.length ? rQueue.map(function(x,i){
+          var checks = (x.failedChecks||[]).map(function(c){return '<span style="background:rgba(239,68,68,.1);color:var(--red);border:1px solid rgba(239,68,68,.2);padding:1px 5px;border-radius:3px;font-size:10px">' + esc(c) + '</span>';}).join(' ');
+          return '<tr><td style="color:var(--t3)">' + (i+1) + '</td>' +
+            '<td style="color:var(--blue);font-family:\'JetBrains Mono\',monospace;font-size:10px">' + esc((x.parentAlphaId||'–').slice(0,16)) + '</td>' +
+            '<td style="font-family:\'JetBrains Mono\',monospace;font-size:10px;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(x.expression||'') + '">' + esc((x.expression||'–').slice(0,60)) + '</td>' +
+            '<td>' + (checks||'<span style="color:var(--t3)">–</span>') + '</td>' +
+            '<td style="color:var(--t2)">D' + (x.repairDepth||0) + '</td>' +
+            '<td style="color:var(--t3)">' + esc(x.createdAt ? new Date(x.createdAt).toLocaleTimeString() : '–') + '</td></tr>';
+        }).join('') : '<tr><td colspan="6" style="color:var(--t3);font-family:inherit">队列为空</td></tr>';
+      }
+      // History table
+      var $rhb = $('rp-history-body');
+      if ($rhb) {
+        var outcomeLabel = { submitted:'<span style="color:var(--green);font-weight:600">✓ 已提交</span>', 're-queued':'<span style="color:var(--amber)">⟳ 再次修复</span>', 'max-depth':'<span style="color:var(--red)">✗ 达到深度上限</span>', 'no-candidate':'<span style="color:var(--t3)">— 无候选</span>' };
+        $rhb.innerHTML = rHistory.length ? rHistory.map(function(h){
+          var hChecks = (h.failedChecks||[]).map(function(c){return '<span style="background:rgba(239,68,68,.1);color:var(--red);border:1px solid rgba(239,68,68,.2);padding:1px 5px;border-radius:3px;font-size:10px">' + esc(c) + '</span>';}).join(' ');
+          return '<tr>' +
+            '<td style="color:var(--blue);font-family:\'JetBrains Mono\',monospace;font-size:10px">' + esc((h.alphaId||'–').slice(0,16)) + '</td>' +
+            '<td style="font-family:\'JetBrains Mono\',monospace;font-size:10px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(h.expression||'') + '">' + esc((h.expression||'–').slice(0,50)) + '</td>' +
+            '<td>' + (hChecks||'<span style="color:var(--t3)">–</span>') + '</td>' +
+            '<td style="color:var(--t2)">D' + (h.repairDepth||0) + '</td>' +
+            '<td>' + (outcomeLabel[h.outcome]||esc(h.outcome||'–')) + '</td>' +
+            '<td style="color:var(--t3)">' + esc(h.completedAt ? new Date(h.completedAt).toLocaleTimeString() : '–') + '</td></tr>';
+        }).join('') : '<tr><td colspan="6" style="color:var(--t3);font-family:inherit">暂无记录</td></tr>';
       }
 
       // Activity
@@ -3375,7 +3479,7 @@ body{display:flex}
             return '<div style="padding:10px 0;border-bottom:1px solid var(--border)">' +
               '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">' +
               '<span style="font-size:10px;font-weight:700;color:' + col + ';text-transform:uppercase;letter-spacing:.08em;background:' + col + '22;padding:2px 8px;border-radius:4px">' + esc(e.category||'') + '</span>' +
-              '<span style="font-size:10px;color:var(--t3);font-family:\\'JetBrains Mono\\',monospace">' + esc(e.field||'') + '</span>' +
+              '<span style="font-size:10px;color:var(--t3);font-family:monospace">' + esc(e.field||'') + '</span>' +
               '<span style="font-size:10px;color:var(--t3);margin-left:auto">' + ts + '</span>' +
               '</div>' +
               '<div style="font-size:12px;color:var(--t2);line-height:1.5">' + esc(e.objective||'') + '</div>' +
