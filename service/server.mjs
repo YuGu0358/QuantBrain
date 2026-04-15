@@ -112,6 +112,10 @@ const userRegistry = await loadUserRegistry();
 let autoLoopState = await loadAutoLoopState();
 objectiveHistory = (await maybeReadJson(OBJECTIVE_HISTORY_PATH)) ?? [];
 scheduleNextRun("startup");
+// On startup: if repair queue has items from a previous session, drain immediately
+if (AUTO_REPAIR_ENABLED && autoLoopState.queue.length > 0) {
+  setTimeout(() => void startNextAutoRepairRun(), 3000);
+}
 
 const server = createServer(async (req, res) => {
   try {
@@ -527,6 +531,14 @@ async function generateScheduledObjective() {
 
 async function tickScheduler() {
   schedulerState.lastTickAt = new Date().toISOString();
+
+  // Drain repair queue opportunistically: if items are waiting and nothing is
+  // running, kick off the next repair without waiting for a mining run to finish.
+  if (AUTO_REPAIR_ENABLED && autoLoopState.queue.length > 0 && !autoLoopState.activeRepair && !hasRunningRun()) {
+    await startNextAutoRepairRun();
+    return;
+  }
+
   if (!schedulerState.enabled) return;
   if (!schedulerState.nextRunAt) scheduleNextRun("missing-next-run");
   if (Date.now() < Date.parse(schedulerState.nextRunAt)) return;
