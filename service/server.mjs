@@ -51,10 +51,13 @@ const DEFAULT_BATCH_SIZE = Number(process.env.AUTO_RUN_BATCH_SIZE ?? 3);
 const DEFAULT_ROUNDS = Number(process.env.AUTO_RUN_ROUNDS ?? 1);
 const DEFAULT_CONCURRENCY = clampInt(process.env.AUTO_RUN_CONCURRENCY, 3, 1, 3);
 const AUTO_LOOP_STATE_PATH = path.join(RUNS_DIR, "auto-loop-state.json");
-const AUTO_REPAIR_ENABLED = process.env.AUTO_REPAIR_ENABLED === "true";
+const AUTO_REPAIR_ENABLED = process.env.AUTO_REPAIR_ENABLED !== "false";
 const AUTO_REPAIR_ENGINE = normalizeEngine(process.env.AUTO_REPAIR_ENGINE ?? "python-v2");
-const AUTO_REPAIR_MAX_ROUNDS = clampInt(process.env.AUTO_REPAIR_MAX_ROUNDS, 5, 1, 10);
+const AUTO_REPAIR_MAX_ROUNDS = clampInt(process.env.AUTO_REPAIR_MAX_ROUNDS, 3, 1, 10);
 const AUTO_REPAIR_BATCH_SIZE = clampInt(process.env.AUTO_REPAIR_BATCH_SIZE, 5, 1, 10);
+const REPAIR_TARGET_SHARPE = parseFloat(process.env.REPAIR_TARGET_SHARPE ?? "1.25");
+const REPAIR_TARGET_FITNESS = parseFloat(process.env.REPAIR_TARGET_FITNESS ?? "1.0");
+const REPAIR_TARGET_TURNOVER = parseFloat(process.env.REPAIR_TARGET_TURNOVER ?? "0.40");
 const AUTO_SUBMIT_ENABLED = process.env.AUTO_SUBMIT_ENABLED === "true";
 const ALPHA_GENERATOR_STRATEGY = ["legacy", "diversity-v2"].includes(process.env.ALPHA_GENERATOR_STRATEGY)
   ? process.env.ALPHA_GENERATOR_STRATEGY
@@ -1277,20 +1280,44 @@ async function handleRunFinished(runState) {
     return;
   }
   const candidates = await loadRunScoredCandidates(runState.outputDir);
+  const best = bestRepairCandidate(candidates);
+  const bestMetrics = extractBestMetrics(best);
+  const targetMet = best ? candidateMeetsRepairTarget(best) : false;
+
   const submitted = await tryAutoSubmitCandidates(candidates, runState.runId, runState.ownerId);
   if (submitted) {
     if (runState.source === "repair") {
-      pushRepairHistory({ alphaId: runState.parentAlphaId, expression: autoLoopState.activeRepair?.expression ?? null, failedChecks: autoLoopState.activeRepair?.failedChecks ?? [], repairDepth: runState.repairDepth ?? 0, outcome: "submitted", runId: runState.runId });
+      pushRepairHistory({ alphaId: runState.parentAlphaId, expression: autoLoopState.activeRepair?.expression ?? null, failedChecks: autoLoopState.activeRepair?.failedChecks ?? [], repairDepth: runState.repairDepth ?? 0, outcome: "submitted", runId: runState.runId, bestMetrics });
       await clearActiveRepair(runState.runId);
     }
     await startNextAutoRepairRun();
     return;
   }
 
-  // Enqueue ALL repair-worthy candidates (up to 3), sorted by priority.
-  // This fills the queue so multiple candidates get repaired in sequence
-  // without waiting for the next mining run.
+  // Target met (Sharpe ≥ 1.25, fitness ≥ 1.0, turnover ≤ 40%) — stop repairing, count as success
+  if (targetMet) {
+    if (runState.source === "repair") {
+      pushRepairHistory({ alphaId: runState.parentAlphaId, expression: autoLoopState.activeRepair?.expression ?? null, failedChecks: autoLoopState.activeRepair?.failedChecks ?? [], repairDepth: runState.repairDepth ?? 0, outcome: "target-met", runId: runState.runId, bestMetrics });
+      await clearActiveRepair(runState.runId);
+    }
+    await saveAutoLoopState();
+    await startNextAutoRepairRun();
+    return;
+  }
+
   const repairDepth = runState.source === "repair" ? Number(runState.repairDepth ?? -1) + 1 : 0;
+
+  // Max rounds reached without hitting target — abandon this candidate
+  if (runState.source === "repair" && repairDepth >= AUTO_REPAIR_MAX_ROUNDS) {
+    pushAutoLoopEvent({ type: "repair-abandoned", runId: runState.runId, ownerId: runState.ownerId });
+    pushRepairHistory({ alphaId: runState.parentAlphaId, expression: autoLoopState.activeRepair?.expression ?? null, failedChecks: autoLoopState.activeRepair?.failedChecks ?? [], repairDepth: runState.repairDepth ?? 0, outcome: "abandoned", runId: runState.runId, bestMetrics });
+    await clearActiveRepair(runState.runId);
+    await saveAutoLoopState();
+    await startNextAutoRepairRun();
+    return;
+  }
+
+  // Still within repair budget — re-queue repair-worthy candidates
   const repairCandidates = chooseRepairCandidates(candidates, 3);
   if (repairCandidates.length > 0) {
     const source = runState.source === "repair" ? "repair-run-finished" : "run-finished";
@@ -1308,13 +1335,12 @@ async function handleRunFinished(runState) {
       });
     }
     if (runState.source === "repair") {
-      const outcome = repairDepth >= AUTO_REPAIR_MAX_ROUNDS ? "max-depth" : "re-queued";
-      pushRepairHistory({ alphaId: runState.parentAlphaId, expression: autoLoopState.activeRepair?.expression ?? null, failedChecks: autoLoopState.activeRepair?.failedChecks ?? [], repairDepth: runState.repairDepth ?? 0, outcome, runId: runState.runId });
+      pushRepairHistory({ alphaId: runState.parentAlphaId, expression: autoLoopState.activeRepair?.expression ?? null, failedChecks: autoLoopState.activeRepair?.failedChecks ?? [], repairDepth: runState.repairDepth ?? 0, outcome: "re-queued", runId: runState.runId, bestMetrics });
     }
   } else {
     pushAutoLoopEvent({ type: "no-repair-candidate", runId: runState.runId, ownerId: runState.ownerId });
     if (runState.source === "repair") {
-      pushRepairHistory({ alphaId: runState.parentAlphaId, expression: autoLoopState.activeRepair?.expression ?? null, failedChecks: autoLoopState.activeRepair?.failedChecks ?? [], repairDepth: runState.repairDepth ?? 0, outcome: "no-candidate", runId: runState.runId });
+      pushRepairHistory({ alphaId: runState.parentAlphaId, expression: autoLoopState.activeRepair?.expression ?? null, failedChecks: autoLoopState.activeRepair?.failedChecks ?? [], repairDepth: runState.repairDepth ?? 0, outcome: "no-candidate", runId: runState.runId, bestMetrics });
     }
   }
 
@@ -1629,6 +1655,40 @@ function failedCheckNames(gate) {
   return [...new Set((gate?.checks ?? []).filter((check) => check.result !== "PASS").map((check) => check.name))];
 }
 
+function candidateMeetsRepairTarget(candidate) {
+  const m = candidate.metrics ?? {};
+  const sharpe = toNumber(m.isSharpe);
+  const fitness = toNumber(m.isFitness ?? m.fitness);
+  const turnover = toNumber(m.turnover);
+  return (
+    Number.isFinite(sharpe) && sharpe >= REPAIR_TARGET_SHARPE &&
+    Number.isFinite(fitness) && fitness >= REPAIR_TARGET_FITNESS &&
+    Number.isFinite(turnover) && turnover <= REPAIR_TARGET_TURNOVER
+  );
+}
+
+function bestRepairCandidate(candidates) {
+  return (candidates ?? []).reduce((best, c) => {
+    const s = toNumber(c.metrics?.isSharpe);
+    const b = toNumber(best?.metrics?.isSharpe);
+    return (Number.isFinite(s) && (!Number.isFinite(b) || s > b)) ? c : best;
+  }, null);
+}
+
+function extractBestMetrics(candidate) {
+  if (!candidate) return null;
+  const m = candidate.metrics ?? {};
+  const sharpe = toNumber(m.isSharpe);
+  const fitness = toNumber(m.isFitness ?? m.fitness);
+  const turnover = toNumber(m.turnover);
+  return {
+    isSharpe: Number.isFinite(sharpe) ? sharpe : null,
+    fitness: Number.isFinite(fitness) ? fitness : null,
+    turnover: Number.isFinite(turnover) ? turnover : null,
+    expression: candidate.expression ?? null,
+  };
+}
+
 function recordAutoSubmission(alphaId, alpha, gate, source, ownerId = "default") {
   autoLoopState.submitted.push({
     alphaId,
@@ -1660,6 +1720,7 @@ function publicAutoLoopState(authContext = systemAuthContext()) {
     familyCooldownRounds: ALPHA_FAMILY_COOLDOWN_ROUNDS,
     maxRepairRounds: AUTO_REPAIR_MAX_ROUNDS,
     repairBatchSize: AUTO_REPAIR_BATCH_SIZE,
+    repairTargets: { sharpe: REPAIR_TARGET_SHARPE, fitness: REPAIR_TARGET_FITNESS, turnover: REPAIR_TARGET_TURNOVER },
     queueLength: queue.length,
     queue: queue.slice(0, 20),
     activeRepair,
@@ -2951,6 +3012,13 @@ body{display:flex}
       <div class="kpi"><div class="kpi-label">已完成</div><div class="kpi-val" id="rp-done">–</div></div>
       <div class="kpi"><div class="kpi-label">修复成功率</div><div class="kpi-val" id="rp-rate">–</div></div>
     </div>
+    <div style="font-size:11px;color:var(--t3);margin-bottom:12px;display:flex;gap:16px;flex-wrap:wrap">
+      <span>目标阈值：</span>
+      <span id="rp-target-sharpe" style="color:var(--t2)">夏普率 ≥ 1.25</span>
+      <span id="rp-target-fitness" style="color:var(--t2)">Fitness ≥ 1.0</span>
+      <span id="rp-target-turnover" style="color:var(--t2)">换手率 ≤ 40%</span>
+      <span id="rp-max-rounds" style="color:var(--t2)">最多修复 3 次</span>
+    </div>
     <div class="box" style="margin-bottom:16px" id="rp-active-box">
       <div class="box-title">当前修复任务</div>
       <div id="rp-active-card"><div style="font-size:12px;color:var(--t3)">当前无修复任务</div></div>
@@ -2968,8 +3036,8 @@ body{display:flex}
       <div class="box-title">修复历史</div>
       <div style="overflow-x:auto">
         <table class="data-table">
-          <thead><tr><th>Alpha ID</th><th>表达式</th><th>失败检查</th><th>深度</th><th>结果</th><th>完成时间</th></tr></thead>
-          <tbody id="rp-history-body"><tr><td colspan="6" style="color:var(--t3);font-family:inherit">暂无记录</td></tr></tbody>
+          <thead><tr><th>Alpha ID</th><th>表达式</th><th>夏普率</th><th>Fitness</th><th>换手率</th><th>结果</th><th>深度</th><th>完成时间</th></tr></thead>
+          <tbody id="rp-history-body"><tr><td colspan="8" style="color:var(--t3);font-family:inherit">暂无记录</td></tr></tbody>
         </table>
       </div>
     </div>
@@ -3346,11 +3414,17 @@ body{display:flex}
       var rQueue = al.queue || [];
       var rActive = al.activeRepair || null;
       var rDone = rHistory.length;
-      var rSuccess = rHistory.filter(function(h){return h.outcome==='submitted';}).length;
+      var rSuccess = rHistory.filter(function(h){return h.outcome==='submitted'||h.outcome==='target-met';}).length;
       var $rpQ = $('rp-queue'); if ($rpQ) $rpQ.textContent = rQueue.length + (rActive ? ' (+1 运行中)' : '');
       var $rpA = $('rp-active'); if ($rpA) $rpA.textContent = rActive ? '运行中' : '空闲';
       var $rpD = $('rp-done'); if ($rpD) $rpD.textContent = rDone;
       var $rpR = $('rp-rate'); if ($rpR) $rpR.textContent = rDone ? Math.round(rSuccess/rDone*100) + '%' : '–';
+      // Update target labels from server config
+      var rt = al.repairTargets || {};
+      var $rts = $('rp-target-sharpe'); if ($rts && rt.sharpe != null) $rts.textContent = '\u590f\u666e\u7387 \u2265 ' + rt.sharpe;
+      var $rtf = $('rp-target-fitness'); if ($rtf && rt.fitness != null) $rtf.textContent = 'Fitness \u2265 ' + rt.fitness;
+      var $rtt = $('rp-target-turnover'); if ($rtt && rt.turnover != null) $rtt.textContent = '\u6362\u624b\u7387 \u2264 ' + Math.round(rt.turnover*100) + '%';
+      var $rmr = $('rp-max-rounds'); if ($rmr && al.maxRepairRounds != null) $rmr.textContent = '\u6700\u591a\u4fee\u590d ' + al.maxRepairRounds + ' \u6b21';
       // Active repair card
       var $ac = $('rp-active-card');
       if ($ac) {
@@ -3382,17 +3456,28 @@ body{display:flex}
       // History table
       var $rhb = $('rp-history-body');
       if ($rhb) {
-        var outcomeLabel = { submitted:'<span style="color:var(--green);font-weight:600">✓ 已提交</span>', 're-queued':'<span style="color:var(--amber)">⟳ 再次修复</span>', 'max-depth':'<span style="color:var(--red)">✗ 达到深度上限</span>', 'no-candidate':'<span style="color:var(--t3)">— 无候选</span>' };
+        var outcomeLabel = {
+          submitted:'<span style="color:var(--green);font-weight:600">\u2713 \u5df2\u63d0\u4ea4</span>',
+          'target-met':'<span style="color:var(--green)">\u2713 \u8fbe\u5230\u76ee\u6807</span>',
+          're-queued':'<span style="color:var(--amber)">\u27f3 \u518d\u6b21\u4fee\u590d</span>',
+          abandoned:'<span style="color:var(--red)">\u2717 \u653e\u5f03</span>',
+          'no-candidate':'<span style="color:var(--t3)">\u2014 \u65e0\u5019\u9009</span>'
+        };
         $rhb.innerHTML = rHistory.length ? rHistory.map(function(h){
-          var hChecks = (h.failedChecks||[]).map(function(c){return '<span style="background:rgba(239,68,68,.1);color:var(--red);border:1px solid rgba(239,68,68,.2);padding:1px 5px;border-radius:3px;font-size:10px">' + esc(c) + '</span>';}).join(' ');
+          var bm = h.bestMetrics || {};
+          var sharpeCell = bm.isSharpe != null ? '<span style="color:' + (bm.isSharpe >= 1.25 ? 'var(--green)' : 'var(--red)') + ';font-weight:600">' + bm.isSharpe.toFixed(2) + '</span>' : '<span style="color:var(--t3)">–</span>';
+          var fitCell = bm.fitness != null ? '<span style="color:' + (bm.fitness >= 1.0 ? 'var(--green)' : 'var(--red)') + '">' + bm.fitness.toFixed(2) + '</span>' : '<span style="color:var(--t3)">–</span>';
+          var toCell = bm.turnover != null ? '<span style="color:' + (bm.turnover <= 0.40 ? 'var(--green)' : 'var(--red)') + '">' + (bm.turnover*100).toFixed(1) + '%</span>' : '<span style="color:var(--t3)">–</span>';
           return '<tr>' +
             '<td style="color:var(--blue);font-family:monospace;font-size:10px">' + esc((h.alphaId||'–').slice(0,16)) + '</td>' +
-            '<td style="font-family:monospace;font-size:10px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(h.expression||'') + '">' + esc((h.expression||'–').slice(0,50)) + '</td>' +
-            '<td>' + (hChecks||'<span style="color:var(--t3)">–</span>') + '</td>' +
-            '<td style="color:var(--t2)">D' + (h.repairDepth||0) + '</td>' +
+            '<td style="font-family:monospace;font-size:10px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(h.expression||'') + '">' + esc((h.expression||'–').slice(0,40)) + '</td>' +
+            '<td style="text-align:right">' + sharpeCell + '</td>' +
+            '<td style="text-align:right">' + fitCell + '</td>' +
+            '<td style="text-align:right">' + toCell + '</td>' +
             '<td>' + (outcomeLabel[h.outcome]||esc(h.outcome||'–')) + '</td>' +
+            '<td style="color:var(--t2)">D' + (h.repairDepth||0) + '</td>' +
             '<td style="color:var(--t3)">' + esc(h.completedAt ? new Date(h.completedAt).toLocaleTimeString() : '–') + '</td></tr>';
-        }).join('') : '<tr><td colspan="6" style="color:var(--t3);font-family:inherit">暂无记录</td></tr>';
+        }).join('') : '<tr><td colspan="8" style="color:var(--t3);font-family:inherit">\u6682\u65e0\u8bb0\u5f55</td></tr>';
       }
 
       // Activity
