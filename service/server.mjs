@@ -146,7 +146,8 @@ const server = createServer(async (req, res) => {
       url.pathname.startsWith("/alphas") ||
       url.pathname.startsWith("/ideas") ||
       url.pathname.startsWith("/auto-loop") ||
-      url.pathname.startsWith("/account")
+      url.pathname.startsWith("/account") ||
+      url.pathname === "/alpha-library"
     ) {
       if (!authContext.ok) {
         return sendJson(res, 401, {
@@ -299,6 +300,10 @@ const server = createServer(async (req, res) => {
     if (req.method === "GET" && runMatch) {
       const runId = sanitizeRunId(decodeURIComponent(runMatch[1]));
       return sendJson(res, 200, await readRun(runId, false, authContext));
+    }
+
+    if (req.method === "GET" && url.pathname === "/alpha-library") {
+      return sendJson(res, 200, await buildAlphaLibrary());
     }
 
     return sendJson(res, 404, { error: "Not found" });
@@ -586,6 +591,45 @@ async function buildRunsIndex(authContext = systemAuthContext()) {
     autoLoop: publicAutoLoopState(authContext),
     diversityStats,
   };
+}
+
+async function buildAlphaLibrary() {
+  const dirs = await listRunDirs(RUNS_DIR);
+  const seen = new Set();
+  const entries = [];
+  for (const runId of dirs.sort().reverse()) {
+    const poolPath = path.join(RUNS_DIR, runId, "pool.json");
+    const pool = await maybeReadJson(poolPath);
+    if (!pool || !Array.isArray(pool.records)) continue;
+    const runTs = runId.match(/\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z/)?.[0]?.replace(/-/g, (m, o, s) => o > 10 ? ':' : m) ?? null;
+    for (const rec of pool.records) {
+      const cand = rec.candidate || {};
+      const bt = rec.backtest || {};
+      const alphaId = bt.alpha_id || cand.id;
+      if (!alphaId || seen.has(alphaId)) continue;
+      const qualifiedByDsr = typeof rec.dsr === 'number' && rec.dsr >= 0;
+      const qualifiedDegraded = rec.degradedQualified === true;
+      if (!qualifiedByDsr && !qualifiedDegraded) continue;
+      seen.add(alphaId);
+      entries.push({
+        alphaId,
+        runId,
+        qualifiedAt: runTs,
+        category: cand.category || bt.category || 'UNKNOWN',
+        expression: cand.expression || bt.expression || '',
+        hypothesis: cand.hypothesis || '',
+        originRefs: cand.origin_refs || [],
+        sharpe: bt.sharpe ?? null,
+        fitness: bt.fitness ?? null,
+        turnover: bt.turnover ?? null,
+        dsr: rec.dsr ?? null,
+        degraded: qualifiedDegraded && !qualifiedByDsr,
+        optRounds: cand.opt_rounds ?? 0,
+      });
+    }
+  }
+  entries.sort((a, b) => (b.sharpe ?? -Infinity) - (a.sharpe ?? -Infinity));
+  return { total: entries.length, entries };
 }
 
 async function readLlmRouterState() {
@@ -2550,6 +2594,33 @@ body{display:flex}
 .alpha-chip-val{font-size:20px;font-weight:700;font-family:'JetBrains Mono',monospace}
 .alpha-chip-label{font-size:9px;color:var(--t3);text-transform:uppercase;letter-spacing:.05em;margin-top:3px}
 
+/* Factor library */
+.lib-filter{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px}
+.lib-pill{padding:4px 12px;border-radius:20px;font-size:11px;font-weight:600;cursor:pointer;border:1px solid var(--border);background:var(--card2);color:var(--t2);transition:all .15s;letter-spacing:.03em}
+.lib-pill.active,.lib-pill:hover{background:var(--blue);border-color:var(--blue);color:#fff}
+.lib-card{background:var(--card2);border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-bottom:10px;transition:border-color .15s}
+.lib-card:hover{border-color:var(--blue)}
+.lib-card-header{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.lib-badge{padding:2px 8px;border-radius:4px;font-size:9px;font-weight:700;letter-spacing:.07em;text-transform:uppercase}
+.lib-badge-QUALITY{background:#1a472a;color:#4ade80}.lib-badge-MOMENTUM{background:#1e3a5f;color:#60a5fa}
+.lib-badge-REVERSAL{background:#4a1942;color:#e879f9}.lib-badge-LIQUIDITY{background:#422006;color:#fb923c}
+.lib-badge-VOLATILITY{background:#1a1a2e;color:#a78bfa}.lib-badge-MICROSTRUCTURE{background:#0f2724;color:#34d399}
+.lib-badge-SENTIMENT{background:#3b1a1a;color:#f87171}.lib-badge-UNKNOWN{background:var(--card);color:var(--t3)}
+.lib-alphaid{font-size:10px;color:var(--t3);font-family:'JetBrains Mono',monospace;flex:1;text-align:right}
+.lib-origin{font-size:9px;padding:2px 7px;border-radius:4px;background:var(--card);border:1px solid var(--border);color:var(--t3)}
+.lib-hypothesis{font-size:12px;color:var(--t1);line-height:1.55;margin-bottom:10px}
+.lib-expr{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--t2);background:var(--card);border:1px solid var(--border);border-radius:6px;padding:7px 10px;margin-bottom:10px;word-break:break-all;line-height:1.6;max-height:48px;overflow:hidden;cursor:pointer;transition:max-height .2s}
+.lib-expr.expanded{max-height:300px}
+.lib-metrics{display:flex;gap:16px}
+.lib-metric{display:flex;flex-direction:column;gap:2px}
+.lib-metric-val{font-size:13px;font-weight:700;font-family:'JetBrains Mono',monospace}
+.lib-metric-lbl{font-size:9px;color:var(--t3);text-transform:uppercase;letter-spacing:.05em}
+.lib-empty{text-align:center;padding:48px 0;color:var(--t3);font-size:13px}
+.lib-stats{display:flex;gap:24px;margin-bottom:16px;flex-wrap:wrap}
+.lib-stat{display:flex;flex-direction:column;gap:3px}
+.lib-stat-val{font-size:22px;font-weight:700;font-family:'JetBrains Mono',monospace;color:var(--t1)}
+.lib-stat-lbl{font-size:9px;color:var(--t3);text-transform:uppercase;letter-spacing:.05em}
+
 /* Idea box */
 .idea-field{width:100%;background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:10px 13px;color:var(--t1);font-size:13px;font-family:inherit;resize:none;height:72px;line-height:1.5;outline:none;transition:border-color .15s}
 .idea-field:focus{border-color:var(--blue)}
@@ -2598,6 +2669,7 @@ body{display:flex}
     <div class="sb-item active" data-tab="overview"><span class="sb-icon">⬡</span>总览</div>
     <div class="sb-item" data-tab="pipeline"><span class="sb-icon">◈</span>流水线</div>
     <div class="sb-item" data-tab="alphas"><span class="sb-icon">◆</span>因子</div>
+    <div class="sb-item" data-tab="library"><span class="sb-icon">▣</span>因子库</div>
     <div class="sb-item" data-tab="knowledge"><span class="sb-icon">◎</span>知识库</div>
     <div class="sb-item" data-tab="runs"><span class="sb-icon">≡</span>运行记录</div>
     <div class="sb-item" data-tab="settings"><span class="sb-icon">⚙</span>设置</div>
@@ -2769,6 +2841,16 @@ body{display:flex}
     </div>
   </div>
 
+  <!-- Factor Library -->
+  <div class="panel" id="panel-library">
+    <div class="box">
+      <div class="box-title" style="margin-bottom:16px">因子库 — 已通过闸门的全部因子</div>
+      <div class="lib-stats" id="lib-stats"></div>
+      <div class="lib-filter" id="lib-filter"></div>
+      <div id="lib-list"><div class="lib-empty">加载中…</div></div>
+    </div>
+  </div>
+
   <!-- Knowledge -->
   <div class="panel" id="panel-knowledge">
     <div class="box" style="margin-bottom:16px">
@@ -2851,7 +2933,7 @@ body{display:flex}
   function $(id) { return document.getElementById(id); }
 
   // Nav tabs
-  const TITLES = { overview:'总览', pipeline:'流水线', alphas:'因子', knowledge:'知识库', runs:'运行记录', settings:'设置' };
+  const TITLES = { overview:'总览', pipeline:'流水线', alphas:'因子', library:'因子库', knowledge:'知识库', runs:'运行记录', settings:'设置' };
   document.querySelectorAll('.sb-item').forEach(function(el) {
     el.addEventListener('click', function() {
       document.querySelectorAll('.sb-item').forEach(function(x){ x.classList.remove('active'); });
@@ -2863,8 +2945,91 @@ body{display:flex}
       var tt = $('topbar-title');
       if (tt) tt.textContent = TITLES[tab] || tab;
       if (tab === 'settings' && !settingsLoaded) loadSettings();
+      if (tab === 'library' && !libLoaded) loadLibrary();
     });
   });
+
+  // Factor Library
+  var libLoaded = false;
+  var libData = [];
+  var libFilter = 'ALL';
+  var CAT_COLORS = { QUALITY:'c-green', MOMENTUM:'c-blue', REVERSAL:'c-purple', LIQUIDITY:'c-amber', VOLATILITY:'c-purple', MICROSTRUCTURE:'c-green', SENTIMENT:'c-red' };
+  function renderLibrary() {
+    var filtered = libFilter === 'ALL' ? libData : libData.filter(function(e){ return e.category === libFilter; });
+    var list = $('lib-list');
+    if (!list) return;
+    if (!filtered.length) {
+      list.innerHTML = '<div class="lib-empty">暂无因子。运行挖掘并通过闸门后将显示在这里。</div>';
+      return;
+    }
+    list.innerHTML = filtered.map(function(e, idx) {
+      var badge = 'lib-badge-' + (e.category || 'UNKNOWN');
+      var origin = (e.originRefs || []).indexOf('llm') >= 0 ? 'AI' : '模板';
+      var sharpe = e.sharpe !== null ? e.sharpe.toFixed(3) : '–';
+      var fitness = e.fitness !== null ? e.fitness.toFixed(3) : '–';
+      var turnover = e.turnover !== null ? (e.turnover * 100).toFixed(1) + '%' : '–';
+      var sharpeColor = e.sharpe !== null ? (e.sharpe >= 1 ? 'c-green' : e.sharpe >= 0.5 ? 'c-amber' : 'c-red') : '';
+      var hyp = e.hypothesis || '（无假设记录）';
+      var degradedTag = e.degraded ? ' <span style="font-size:9px;color:var(--amber);margin-left:6px">降级模式</span>' : '';
+      return '<div class="lib-card">' +
+        '<div class="lib-card-header">' +
+          '<span class="lib-badge ' + badge + '">' + (e.category || 'UNKNOWN') + '</span>' +
+          '<span class="lib-origin">' + origin + '</span>' +
+          degradedTag +
+          '<span class="lib-alphaid">' + e.alphaId + '</span>' +
+        '</div>' +
+        '<div class="lib-hypothesis">' + hyp + '</div>' +
+        '<div class="lib-expr" id="libexpr-' + idx + '" onclick="this.classList.toggle(\'expanded\')" title="点击展开/折叠">' + e.expression + '</div>' +
+        '<div class="lib-metrics">' +
+          '<div class="lib-metric"><div class="lib-metric-val ' + sharpeColor + '">' + sharpe + '</div><div class="lib-metric-lbl">IS Sharpe</div></div>' +
+          '<div class="lib-metric"><div class="lib-metric-val">' + fitness + '</div><div class="lib-metric-lbl">Fitness</div></div>' +
+          '<div class="lib-metric"><div class="lib-metric-val">' + turnover + '</div><div class="lib-metric-lbl">换手率</div></div>' +
+          (e.qualifiedAt ? '<div class="lib-metric" style="margin-left:auto"><div class="lib-metric-val" style="font-size:10px">' + (e.qualifiedAt || '').replace('T',' ').slice(0,16) + '</div><div class="lib-metric-lbl">挖掘时间</div></div>' : '') +
+        '</div>' +
+      '</div>';
+    }).join('');
+  }
+  function renderLibStats(data) {
+    var stats = $('lib-stats');
+    if (!stats) return;
+    var cats = {};
+    data.entries.forEach(function(e){ cats[e.category] = (cats[e.category]||0) + 1; });
+    var catKeys = Object.keys(cats).sort();
+    var avgSharpe = data.entries.filter(function(e){ return e.sharpe !== null; });
+    var avg = avgSharpe.length ? (avgSharpe.reduce(function(s,e){ return s + e.sharpe; }, 0) / avgSharpe.length).toFixed(3) : '–';
+    stats.innerHTML =
+      '<div class="lib-stat"><div class="lib-stat-val c-blue">' + data.total + '</div><div class="lib-stat-lbl">因子总数</div></div>' +
+      '<div class="lib-stat"><div class="lib-stat-val c-green">' + avg + '</div><div class="lib-stat-lbl">平均Sharpe</div></div>' +
+      catKeys.map(function(c){ return '<div class="lib-stat"><div class="lib-stat-val">' + cats[c] + '</div><div class="lib-stat-lbl">' + c + '</div></div>'; }).join('');
+  }
+  function renderLibFilter(data) {
+    var f = $('lib-filter');
+    if (!f) return;
+    var cats = {};
+    data.entries.forEach(function(e){ cats[e.category] = (cats[e.category]||0) + 1; });
+    var catKeys = Object.keys(cats).sort();
+    f.innerHTML = '<span class="lib-pill' + (libFilter==='ALL'?' active':'') + '" onclick="setLibFilter(\'ALL\')">全部 (' + data.total + ')</span>' +
+      catKeys.map(function(c){ return '<span class="lib-pill' + (libFilter===c?' active':'') + '" onclick="setLibFilter(\'' + c + '\')">' + c + ' (' + cats[c] + ')</span>'; }).join('');
+  }
+  window.setLibFilter = function(cat) {
+    libFilter = cat;
+    renderLibFilter({ entries: libData, total: libData.length });
+    renderLibrary();
+  };
+  async function loadLibrary() {
+    libLoaded = true;
+    try {
+      var r = await fetch('/alpha-library', { headers: h });
+      var data = await r.json();
+      libData = data.entries || [];
+      renderLibStats(data);
+      renderLibFilter(data);
+      renderLibrary();
+    } catch(e) {
+      var list = $('lib-list');
+      if (list) list.innerHTML = '<div class="lib-empty">加载失败: ' + e.message + '</div>';
+    }
+  }
 
   // Countdown
   var nextRunAt = null;
