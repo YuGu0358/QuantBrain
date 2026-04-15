@@ -1,4 +1,5 @@
 .env
+teammate-*.txt
 __pycache__/
 *.pyc
 *.pyo
