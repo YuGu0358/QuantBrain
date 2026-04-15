@@ -3252,7 +3252,7 @@ body{display:flex}
       // Python: generatedCandidates, total_brain_simulations, qualified_alphas_count
       // Legacy-js: no direct equivalents, infer from topCandidates
       var totalGen = 0, totalSim = 0, totalPass = 0, totalFail = 0;
-      var totalRep = al.queue ? al.queue.length : (al.queueLength || 0);
+      var totalRep = (al.queue ? al.queue.length : (al.queueLength || 0)) + (al.activeRepair ? 1 : 0);
       // totalSub comes from autoLoopState submissions, not summary
       var totalSub = (al.submitted || []).length;
       recent.forEach(function(x) {
