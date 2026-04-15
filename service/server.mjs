@@ -535,6 +535,9 @@ async function generateScheduledObjective() {
 async function tickScheduler() {
   schedulerState.lastTickAt = new Date().toISOString();
 
+  // Heal any stuck activeRepair first (e.g. createRun threw before spawning the process)
+  if (AUTO_REPAIR_ENABLED) await recoverStuckActiveRepair();
+
   // Drain repair queue opportunistically: if items are waiting and nothing is
   // running, kick off the next repair without waiting for a mining run to finish.
   if (AUTO_REPAIR_ENABLED && autoLoopState.queue.length > 0 && !autoLoopState.activeRepair && !hasRunningRun()) {
@@ -1420,8 +1423,22 @@ function buildRepairQueueItem({ alpha, gate, source, sourceRunId, repairDepth, r
   };
 }
 
+// Recover from stuck activeRepair: if it points to a runId that is no longer running
+// (e.g., createRun threw before spawning, or server restarted mid-repair), clear it.
+async function recoverStuckActiveRepair() {
+  if (!autoLoopState.activeRepair) return;
+  const runId = autoLoopState.activeRepair.runId;
+  if (runId && activeRuns.has(runId)) return; // run is in memory — still live
+  // activeRepair points to nothing running — clear it
+  console.log(`[repair] Clearing stuck activeRepair ${runId ?? "(no runId)"} — no matching active run`);
+  pushAutoLoopEvent({ type: "repair-stuck-cleared", runId: runId ?? null, alphaId: autoLoopState.activeRepair.parentAlphaId });
+  autoLoopState.activeRepair = null;
+  await saveAutoLoopState();
+}
+
 async function startNextAutoRepairRun() {
   if (!AUTO_REPAIR_ENABLED) return null;
+  await recoverStuckActiveRepair();
   if (hasRunningRun()) return null;
   if (autoLoopState.activeRepair) return null;
   const item = autoLoopState.queue.shift();
@@ -1439,21 +1456,31 @@ async function startNextAutoRepairRun() {
   autoLoopState.lastAction = `Started repair run ${runId}`;
   pushAutoLoopEvent({ type: "repair-started", runId, alphaId: item.parentAlphaId, ownerId: item.ownerId, repairDepth: item.repairDepth });
   await saveAutoLoopState();
-  await createRun(
-    {
-      runId,
-      mode: "evaluate",
-      engine: AUTO_REPAIR_ENGINE,
-      objective: buildRepairObjective(item),
-      rounds: 1,
-      batchSize: AUTO_REPAIR_BATCH_SIZE,
-      repairContext: item,
-      parentAlphaId: item.rootAlphaId ?? item.parentAlphaId,
-      ownerId: item.ownerId ?? "default",
-    },
-    "repair",
-    systemAuthContext(item.ownerId ?? "default"),
-  );
+  try {
+    await createRun(
+      {
+        runId,
+        mode: "evaluate",
+        engine: AUTO_REPAIR_ENGINE,
+        objective: buildRepairObjective(item),
+        rounds: 1,
+        batchSize: AUTO_REPAIR_BATCH_SIZE,
+        repairContext: item,
+        parentAlphaId: item.rootAlphaId ?? item.parentAlphaId,
+        ownerId: item.ownerId ?? "default",
+      },
+      "repair",
+      systemAuthContext(item.ownerId ?? "default"),
+    );
+  } catch (err) {
+    // createRun failed — clear activeRepair so the next tick can retry or move on
+    console.error(`[repair] createRun failed for ${runId}: ${err?.message ?? err}`);
+    pushAutoLoopEvent({ type: "repair-start-failed", runId, alphaId: item.parentAlphaId, error: err?.message ?? String(err) });
+    pushRepairHistory({ alphaId: item.parentAlphaId, expression: item.expression ?? null, failedChecks: item.failedChecks ?? [], repairDepth: item.repairDepth ?? 0, outcome: "start-failed", runId, bestMetrics: null });
+    autoLoopState.activeRepair = null;
+    await saveAutoLoopState();
+    return null;
+  }
   return runId;
 }
 
@@ -3461,7 +3488,8 @@ body{display:flex}
           'target-met':'<span style="color:var(--green)">\u2713 \u8fbe\u5230\u76ee\u6807</span>',
           're-queued':'<span style="color:var(--amber)">\u27f3 \u518d\u6b21\u4fee\u590d</span>',
           abandoned:'<span style="color:var(--red)">\u2717 \u653e\u5f03</span>',
-          'no-candidate':'<span style="color:var(--t3)">\u2014 \u65e0\u5019\u9009</span>'
+          'no-candidate':'<span style="color:var(--t3)">\u2014 \u65e0\u5019\u9009</span>',
+          'start-failed':'<span style="color:var(--red)">\u26a0 \u542f\u52a8\u5931\u8d25</span>'
         };
         $rhb.innerHTML = rHistory.length ? rHistory.map(function(h){
           var bm = h.bestMetrics || {};
