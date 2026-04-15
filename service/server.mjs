@@ -3346,8 +3346,8 @@ body{display:flex}
           var acChecks = (rActive.failedChecks||[]).map(function(c){return '<span style="background:rgba(239,68,68,.15);color:var(--red);border:1px solid rgba(239,68,68,.3);padding:2px 7px;border-radius:4px;font-size:11px;font-weight:600">' + esc(c) + '</span>';}).join(' ');
           $ac.innerHTML = '<div style="display:flex;flex-direction:column;gap:10px">' +
             '<div style="display:flex;align-items:center;gap:8px"><div style="width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 6px var(--green)"></div><span style="font-size:12px;font-weight:600;color:var(--green)">正在修复</span><span style="font-size:11px;color:var(--t3)">深度 D' + (rActive.repairDepth||0) + '</span></div>' +
-            '<div style="font-size:11px;color:var(--t3)">Alpha ID</div><div style="font-family:\'JetBrains Mono\',monospace;font-size:12px;color:var(--t1)">' + esc(rActive.parentAlphaId||'–') + '</div>' +
-            '<div style="font-size:11px;color:var(--t3)">原始表达式</div><div style="font-family:\'JetBrains Mono\',monospace;font-size:11px;color:var(--t2);word-break:break-all;background:var(--card2);border:1px solid var(--border);border-radius:6px;padding:8px">' + esc(rActive.expression||'–') + '</div>' +
+            '<div style="font-size:11px;color:var(--t3)">Alpha ID</div><div style="font-family:monospace;font-size:12px;color:var(--t1)">' + esc(rActive.parentAlphaId||'–') + '</div>' +
+            '<div style="font-size:11px;color:var(--t3)">原始表达式</div><div style="font-family:monospace;font-size:11px;color:var(--t2);word-break:break-all;background:var(--card2);border:1px solid var(--border);border-radius:6px;padding:8px">' + esc(rActive.expression||'–') + '</div>' +
             '<div style="font-size:11px;color:var(--t3)">失败检查</div><div style="display:flex;flex-wrap:wrap;gap:6px">' + (acChecks||'<span style="color:var(--t3);font-size:12px">–</span>') + '</div>' +
             '</div>';
         } else {
@@ -3360,8 +3360,8 @@ body{display:flex}
         $rqb.innerHTML = rQueue.length ? rQueue.map(function(x,i){
           var checks = (x.failedChecks||[]).map(function(c){return '<span style="background:rgba(239,68,68,.1);color:var(--red);border:1px solid rgba(239,68,68,.2);padding:1px 5px;border-radius:3px;font-size:10px">' + esc(c) + '</span>';}).join(' ');
           return '<tr><td style="color:var(--t3)">' + (i+1) + '</td>' +
-            '<td style="color:var(--blue);font-family:\'JetBrains Mono\',monospace;font-size:10px">' + esc((x.parentAlphaId||'–').slice(0,16)) + '</td>' +
-            '<td style="font-family:\'JetBrains Mono\',monospace;font-size:10px;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(x.expression||'') + '">' + esc((x.expression||'–').slice(0,60)) + '</td>' +
+            '<td style="color:var(--blue);font-family:monospace;font-size:10px">' + esc((x.parentAlphaId||'–').slice(0,16)) + '</td>' +
+            '<td style="font-family:monospace;font-size:10px;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(x.expression||'') + '">' + esc((x.expression||'–').slice(0,60)) + '</td>' +
             '<td>' + (checks||'<span style="color:var(--t3)">–</span>') + '</td>' +
             '<td style="color:var(--t2)">D' + (x.repairDepth||0) + '</td>' +
             '<td style="color:var(--t3)">' + esc(x.createdAt ? new Date(x.createdAt).toLocaleTimeString() : '–') + '</td></tr>';
@@ -3374,8 +3374,8 @@ body{display:flex}
         $rhb.innerHTML = rHistory.length ? rHistory.map(function(h){
           var hChecks = (h.failedChecks||[]).map(function(c){return '<span style="background:rgba(239,68,68,.1);color:var(--red);border:1px solid rgba(239,68,68,.2);padding:1px 5px;border-radius:3px;font-size:10px">' + esc(c) + '</span>';}).join(' ');
           return '<tr>' +
-            '<td style="color:var(--blue);font-family:\'JetBrains Mono\',monospace;font-size:10px">' + esc((h.alphaId||'–').slice(0,16)) + '</td>' +
-            '<td style="font-family:\'JetBrains Mono\',monospace;font-size:10px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(h.expression||'') + '">' + esc((h.expression||'–').slice(0,50)) + '</td>' +
+            '<td style="color:var(--blue);font-family:monospace;font-size:10px">' + esc((h.alphaId||'–').slice(0,16)) + '</td>' +
+            '<td style="font-family:monospace;font-size:10px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(h.expression||'') + '">' + esc((h.expression||'–').slice(0,50)) + '</td>' +
             '<td>' + (hChecks||'<span style="color:var(--t3)">–</span>') + '</td>' +
             '<td style="color:var(--t2)">D' + (h.repairDepth||0) + '</td>' +
             '<td>' + (outcomeLabel[h.outcome]||esc(h.outcome||'–')) + '</td>' +
