@@ -56,7 +56,7 @@ def main() -> None:
         kb=kb,
         cache=cache,
         taxonomy=taxonomy,
-        model=os.environ.get("OPENAI_IDEA_MODEL", "gpt-5.4-mini"),
+        model=os.environ.get("OPENAI_IDEA_MODEL", "gpt-4o-mini"),
         temperature=float(generation_cfg.get("temperature", 0.4)),
         top_p=float(generation_cfg.get("top_p", 0.9)),
         max_tokens=int(generation_cfg.get("max_tokens", 800)),

@@ -28,7 +28,7 @@ class HypothesisAgent:
         kb: KnowledgeBase,
         cache: LLMCache,
         taxonomy: dict[str, Any],
-        model: str = "gpt-5.4-mini",
+        model: str = "gpt-4o-mini",
         temperature: float = 0.4,
         top_p: float = 0.9,
         max_tokens: int = 800,

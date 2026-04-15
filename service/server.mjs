@@ -26,7 +26,7 @@ const ADMIN_TOKEN = process.env.ADMIN_TOKEN ?? "";
 const CREDENTIALS_SECRET = process.env.CREDENTIALS_SECRET ?? "";
 const DASHBOARD_USERS = parseDashboardUsers(process.env.DASHBOARD_USERS ?? "");
 const REGISTRATION_CODE = process.env.REGISTRATION_CODE ?? "";
-const OPENAI_IDEA_MODEL = process.env.OPENAI_IDEA_MODEL ?? "gpt-5.4-mini";
+const OPENAI_IDEA_MODEL = process.env.OPENAI_IDEA_MODEL ?? "gpt-4o-mini";
 const OPENAI_OPTIMIZE_MODEL = "gpt-4o-mini";
 const OPTIMIZE_IDEA_SYSTEM_PROMPT =
   'You are a WorldQuant BRAIN alpha research specialist. Convert the user idea into a structured research direction. Return strict JSON: {"objective":string,"category":one of QUALITY/MOMENTUM/REVERSAL/LIQUIDITY/VOLATILITY/MICROSTRUCTURE/SENTIMENT,"hypothesis":string,"constraints":[string],"suggested_data_fields":[string]}';
