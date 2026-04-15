@@ -2979,7 +2979,7 @@ body{display:flex}
           '<span class="lib-alphaid">' + e.alphaId + '</span>' +
         '</div>' +
         '<div class="lib-hypothesis">' + hyp + '</div>' +
-        '<div class="lib-expr" id="libexpr-' + idx + '" onclick="this.classList.toggle(\'expanded\')" title="点击展开/折叠">' + e.expression + '</div>' +
+        '<div class="lib-expr" id="libexpr-' + idx + '" onclick="this.classList.toggle(&apos;expanded&apos;)" title="点击展开/折叠">' + e.expression + '</div>' +
         '<div class="lib-metrics">' +
           '<div class="lib-metric"><div class="lib-metric-val ' + sharpeColor + '">' + sharpe + '</div><div class="lib-metric-lbl">IS Sharpe</div></div>' +
           '<div class="lib-metric"><div class="lib-metric-val">' + fitness + '</div><div class="lib-metric-lbl">Fitness</div></div>' +
@@ -3008,8 +3008,8 @@ body{display:flex}
     var cats = {};
     data.entries.forEach(function(e){ cats[e.category] = (cats[e.category]||0) + 1; });
     var catKeys = Object.keys(cats).sort();
-    f.innerHTML = '<span class="lib-pill' + (libFilter==='ALL'?' active':'') + '" onclick="setLibFilter(\'ALL\')">全部 (' + data.total + ')</span>' +
-      catKeys.map(function(c){ return '<span class="lib-pill' + (libFilter===c?' active':'') + '" onclick="setLibFilter(\'' + c + '\')">' + c + ' (' + cats[c] + ')</span>'; }).join('');
+    f.innerHTML = '<span class="lib-pill' + (libFilter==='ALL'?' active':'') + '" onclick="setLibFilter(&apos;ALL&apos;)">全部 (' + data.total + ')</span>' +
+      catKeys.map(function(c){ return '<span class="lib-pill' + (libFilter===c?' active':'') + '" onclick="setLibFilter(&apos;' + c + '&apos;)">' + c + ' (' + cats[c] + ')</span>'; }).join('');
   }
   window.setLibFilter = function(cat) {
     libFilter = cat;
