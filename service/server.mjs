@@ -1512,7 +1512,7 @@ function repairPriority(candidate) {
   if (failures.has("LOW_SHARPE") || failures.has("SHARPE") || failures.has("LOW_FITNESS") || failures.has("FITNESS")) score += 1.0;
   if (failures.has("SELF_CORRELATION")) score += 0.6;
   if (failures.has("LOW_SUB_UNIVERSE_SHARPE")) score += 0.4;
-  if (failures.has("HIGH_TURNOVER") || failures.has("TURNOVER") || (metrics.turnover !== null && metrics.turnover > 0.7)) score -= 1.0;
+  if (failures.has("HIGH_TURNOVER") || failures.has("TURNOVER") || (metrics.turnover !== null && metrics.turnover > 0.7)) score += 0.8;
   if (metrics.testSharpe !== null && metrics.testSharpe <= 0) score -= 0.5;
   return score;
 }
@@ -1813,6 +1813,13 @@ function evaluateSubmissionGate(alpha) {
     // submitted so BRAIN can evaluate it and return real OOS results.
     if (!Number.isFinite(isSharpe) || isSharpe < 0.5) {
       reasons.push(`Degraded mode: IS Sharpe must be >= 0.5, got ${Number.isFinite(isSharpe) ? isSharpe.toFixed(3) : "missing"}.`);
+    }
+  }
+
+  const turnover = toNumber(alpha?.is?.turnover);
+  if (Number.isFinite(turnover)) {
+    if (turnover < 0.01 || turnover > 0.70) {
+      reasons.push(`Turnover ${(turnover * 100).toFixed(1)}% is outside valid range 1%-70%.`);
     }
   }
 

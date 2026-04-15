@@ -50,6 +50,22 @@ class KnowledgeDistiller:
                     metadata={"sharpe": sharpe, "source": "distilled", "dsr": dsr},
                 )
 
+            # Record turnover failures directly (no LLM needed)
+            if not passed and expression:
+                turnover = bt.get("turnover")
+                if turnover is not None and (turnover < 0.01 or turnover > 0.70):
+                    direction = "too low" if turnover < 0.01 else "too high"
+                    fix = (
+                        "Add ts_mean(signal, 21) smoothing or use ts_rank(x, 60) to reduce turnover."
+                        if turnover > 0.70
+                        else "Shorten smoothing windows or use ts_delta with smaller lookback to increase turnover."
+                    )
+                    self.kb.record_failure_pattern(
+                        reason=f"TURNOVER_{direction.upper().replace(' ', '_')}:{turnover:.3f}",
+                        expression=expression,
+                        suggested_fix=fix,
+                    )
+
         if self.router is None:
             return
 
@@ -62,12 +78,25 @@ class KnowledgeDistiller:
             return
 
         provider = self.router.pick("distill")
+
+        def _turnover_tag(record):
+            bt = record.get("backtest") or {}
+            t = bt.get("turnover")
+            if t is None:
+                return None
+            if t < 0.01:
+                return f"LOW_TURNOVER({t:.3f})"
+            if t > 0.70:
+                return f"HIGH_TURNOVER({t:.3f})"
+            return None
+
         prompt_data = {
             "task": "extract_failure_patterns",
             "failed_candidates": [
                 {
                     "expression": record.get("candidate", {}).get("expression", ""),
                     "reason": record.get("scorecard", {}).get("reason", "UNKNOWN"),
+                    "turnover_issue": _turnover_tag(record),
                 }
                 for record in failed[:10]
             ],

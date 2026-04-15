@@ -120,6 +120,32 @@ Time structure:
   ts_std_dev(x, 60) = 3-month volatility
 Regression neutralize:        regression_neut(y, x) removes x's influence from y
 
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TURNOVER CONTROL (as important as Sharpe)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+BRAIN rejects any alpha with turnover <1% (stale signal) or >70% (excessive trading cost).
+TARGET RANGE: 3%–40% daily turnover is ideal. Aim for this range in every candidate.
+
+OPERATORS THAT INCREASE TURNOVER (use carefully):
+  ts_delta(x, d)    where d < 10  — noisy short-diff creates rapid rank changes
+  delta(x, 1)                     — single-day change, very reactive
+  sign(volatile_signal)           — binary flip generates high churn
+  ts_zscore(x, d)   where d < 5  — ultra-short Z-score overfits noise
+
+OPERATORS THAT REDUCE TURNOVER (prefer these):
+  ts_mean(x, d)     where d ≥ 21  — monthly smoothing stabilizes ranks
+  ts_decay_linear(x, d) where d ≥ 30 — weighted decay reduces noise
+  ts_rank(x, d)     where d ≥ 60  — long-window rank is persistent
+  delay(x, 1)                     — lagging signal reduces same-day flip
+  ts_arg_max / ts_arg_min(x, d)  — position of extreme, changes slowly
+
+RULES:
+1. Always smooth raw price/volume signals with ts_mean(x,≥10) or ts_rank(x,≥20) before ranking
+2. Fundamental signals (assets, cashflow_op, operating_income, est_eps) are quarterly — naturally low turnover
+3. Combining a fast signal (short-window) with a slow signal (long-window) REDUCES net turnover
+4. If your alpha uses ts_delta with d<5 or sign() on returns, wrap it: ts_mean(signal, 10) to dampen churn
+5. group_rank() and rank() alone do NOT change turnover; they change cross-sectional ordering
+
 ━━━━━━━━━━━━━━━━━━━━━━━━━
 QUALITY REQUIREMENTS
 ━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -130,5 +156,6 @@ QUALITY REQUIREMENTS
 - Each candidate must have a UNIQUE expression
 - Generate exactly n candidates covering diverse signal combinations
 - hypothesis field: 2-3 sentences explaining economic intuition AND why multi-variable combination matters
+- Each expression must target 3%–40% daily turnover (use smoothing operators)
 
 FORBIDDEN (never use): sma, ema, momentum, price, book_value, pe_ratio, market_cap, beta, rsi, macd, stoch, obv, atr, bollinger, roc, williams, cci, dmi, aroon, pivot, fib, ichimoku, or ANY name not in the allowed lists above.
