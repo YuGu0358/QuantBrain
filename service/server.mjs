@@ -1265,7 +1265,6 @@ async function handleRunFinished(runState) {
     return;
   }
   const candidates = await loadRunScoredCandidates(runState.outputDir);
-  const bestRepairCandidate = chooseRepairCandidate(candidates);
   const submitted = await tryAutoSubmitCandidates(candidates, runState.runId, runState.ownerId);
   if (submitted) {
     if (runState.source === "repair") await clearActiveRepair(runState.runId);
@@ -1273,20 +1272,26 @@ async function handleRunFinished(runState) {
     return;
   }
 
-  if (bestRepairCandidate) {
-    const priorDepth = Number(runState.repairDepth ?? -1);
-    const repairDepth = runState.source === "repair" ? priorDepth + 1 : 0;
-    const gate = evaluateCandidateGate(bestRepairCandidate);
-    await enqueueRepairFromGate({
-      alpha: summarizeCandidateAsAlpha(bestRepairCandidate),
-      gate,
-      source: runState.source === "repair" ? "repair-run-finished" : "run-finished",
-      sourceRunId: runState.runId,
-      repairDepth,
-      rootAlphaId: runState.parentAlphaId ?? bestRepairCandidate.alphaId,
-      ownerId: runState.ownerId,
-      _category: bestRepairCandidate._category ?? null,
-    });
+  // Enqueue ALL repair-worthy candidates (up to 3), sorted by priority.
+  // This fills the queue so multiple candidates get repaired in sequence
+  // without waiting for the next mining run.
+  const repairDepth = runState.source === "repair" ? Number(runState.repairDepth ?? -1) + 1 : 0;
+  const repairCandidates = chooseRepairCandidates(candidates, 3);
+  if (repairCandidates.length > 0) {
+    const source = runState.source === "repair" ? "repair-run-finished" : "run-finished";
+    for (const candidate of repairCandidates) {
+      const gate = evaluateCandidateGate(candidate);
+      await enqueueRepairFromGate({
+        alpha: summarizeCandidateAsAlpha(candidate),
+        gate,
+        source,
+        sourceRunId: runState.runId,
+        repairDepth,
+        rootAlphaId: runState.parentAlphaId ?? candidate.alphaId,
+        ownerId: runState.ownerId,
+        _category: candidate._category ?? null,
+      });
+    }
   } else {
     pushAutoLoopEvent({ type: "no-repair-candidate", runId: runState.runId, ownerId: runState.ownerId });
   }
@@ -1502,6 +1507,13 @@ function chooseRepairCandidate(candidates) {
     .sort((left, right) => repairPriority(right) - repairPriority(left))[0] ?? null;
 }
 
+function chooseRepairCandidates(candidates, maxItems = 3) {
+  return candidates
+    .filter((candidate) => candidate.alphaId && !evaluateCandidateGate(candidate).ok)
+    .sort((left, right) => repairPriority(right) - repairPriority(left))
+    .slice(0, maxItems);
+}
+
 function repairPriority(candidate) {
   const metrics = candidate.metrics ?? {};
   const gate = evaluateCandidateGate(candidate);
@@ -1510,6 +1522,9 @@ function repairPriority(candidate) {
   if (metrics.testSharpe !== null && metrics.testSharpe > 0) score += 1.5;
   // Accept both legacy names (LOW_SHARPE) and python-v2 names (SHARPE / FITNESS)
   if (failures.has("LOW_SHARPE") || failures.has("SHARPE") || failures.has("LOW_FITNESS") || failures.has("FITNESS")) score += 1.0;
+  // Fitness is equally important: low fitness is repaired with same priority as low Sharpe
+  const fitness = toNumber(metrics.isFitness ?? metrics.fitness);
+  if (Number.isFinite(fitness) && fitness < 0.5) score += 0.8;
   if (failures.has("SELF_CORRELATION")) score += 0.6;
   if (failures.has("LOW_SUB_UNIVERSE_SHARPE")) score += 0.4;
   if (failures.has("HIGH_TURNOVER") || failures.has("TURNOVER") || (metrics.turnover !== null && metrics.turnover > 0.7)) score += 0.8;
@@ -1821,6 +1836,11 @@ function evaluateSubmissionGate(alpha) {
     if (turnover < 0.01 || turnover > 0.70) {
       reasons.push(`Turnover ${(turnover * 100).toFixed(1)}% is outside valid range 1%-70%.`);
     }
+  }
+
+  const isFitness = toNumber(alpha?.is?.fitness);
+  if (Number.isFinite(isFitness) && isFitness < 0.5) {
+    reasons.push(`IS Fitness ${isFitness.toFixed(3)} is below minimum 0.5.`);
   }
 
   return {

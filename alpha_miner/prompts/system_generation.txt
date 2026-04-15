@@ -120,6 +120,24 @@ Time structure:
   ts_std_dev(x, 60) = 3-month volatility
 Regression neutralize:        regression_neut(y, x) removes x's influence from y
 
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FITNESS (as important as Sharpe — required ≥ 0.5)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+BRAIN Fitness = Sharpe × sub-universe quality × returns-distribution score. It penalizes:
+  - Concentrated bets (few stocks driving all return)
+  - Non-normal return distributions (fat tails, skew)
+  - Poor sub-universe coverage (only works on tiny slice of universe)
+MINIMUM: Fitness ≥ 0.5 required. Target ≥ 0.7.
+
+HOW TO IMPROVE FITNESS:
+1. Use group_rank(expr, industry) — forces balanced exposure across ALL sectors → improves coverage
+2. Use rank(expr) at the outer level — normalizes return distribution, spreads bets uniformly
+3. Combine 2-3 signals additively (rank(A + B - C)) — diversifies concentration risk
+4. Avoid sign() on a single dominant signal — creates binary bets → low fitness
+5. Use ts_mean(x, ≥20) smoothing — prevents outlier periods from driving all returns
+6. Add winsorize() around volatile sub-expressions to cap fat tails
+7. group_neutralize(expr, industry) reduces sector concentration
+
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 TURNOVER CONTROL (as important as Sharpe)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

@@ -50,7 +50,7 @@ class KnowledgeDistiller:
                     metadata={"sharpe": sharpe, "source": "distilled", "dsr": dsr},
                 )
 
-            # Record turnover failures directly (no LLM needed)
+            # Record turnover and fitness failures directly (no LLM needed)
             if not passed and expression:
                 turnover = bt.get("turnover")
                 if turnover is not None and (turnover < 0.01 or turnover > 0.70):
@@ -64,6 +64,18 @@ class KnowledgeDistiller:
                         reason=f"TURNOVER_{direction.upper().replace(' ', '_')}:{turnover:.3f}",
                         expression=expression,
                         suggested_fix=fix,
+                    )
+
+                fitness = bt.get("fitness")
+                if fitness is not None and fitness < 0.5:
+                    self.kb.record_failure_pattern(
+                        reason=f"LOW_FITNESS:{fitness:.3f}",
+                        expression=expression,
+                        suggested_fix=(
+                            "Wrap expression in group_rank(expr, industry) for balanced sector coverage. "
+                            "Use rank() at outer level to normalize distribution. "
+                            "Combine 2-3 signals additively to reduce concentration."
+                        ),
                     )
 
         if self.router is None:
