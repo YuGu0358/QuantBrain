@@ -85,28 +85,24 @@ def main() -> None:
         except Exception:
             pass
 
-    # If repair context is provided, bias the objective toward fixing the parent alpha
+    # If repair context is provided, pass it as structured data to the generation agent
     effective_objective = args.objective
+    repair_ctx: dict | None = None
     if args.repair_context:
         try:
-            ctx = read_json(Path(args.repair_context))
-            parent_expr = ctx.get("expression") or ""
-            failed = ctx.get("failedChecks") or []
-            gate_reasons = ctx.get("gate", {}).get("reasons") or []
-            if parent_expr:
-                repair_note = f" [修复: {parent_expr[:120]}"
-                if failed:
-                    repair_note += f", 失败检查: {', '.join(failed[:3])}"
-                if gate_reasons:
-                    repair_note += f", 原因: {'; '.join(gate_reasons[:2])}"
-                repair_note += "]"
-                effective_objective = args.objective + repair_note
-            if ctx.get("_category"):
-                category = ctx["_category"]
+            repair_ctx = read_json(Path(args.repair_context))
+            if repair_ctx:
+                if repair_ctx.get("_category"):
+                    category = repair_ctx["_category"]
+                parent_expr = repair_ctx.get("expression") or ""
+                failed = repair_ctx.get("failedChecks") or []
+                # Keep a short human-readable note in the objective for logging
+                if parent_expr:
+                    effective_objective = f"Repair alpha with failed checks {failed}: {parent_expr[:80]}"
         except Exception:
-            pass
+            repair_ctx = None
 
-    candidates = agent.generate_batch(effective_objective, category=category, n=batch_size, use_llm=args.use_llm)
+    candidates = agent.generate_batch(effective_objective, category=category, n=batch_size, use_llm=args.use_llm, repair_context=repair_ctx)
 
     validator_records = []
     valid_candidates = []

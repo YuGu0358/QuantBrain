@@ -54,8 +54,8 @@ class HypothesisAgent:
             return "QUALITY"
         return min(categories, key=lambda item: (counts.get(item, 0), item))
 
-    def generate_batch(self, objective: str, category: str, n: int = 10, use_llm: bool = False) -> list[Candidate]:
-        request_payload = self._request_payload(objective, category, n)
+    def generate_batch(self, objective: str, category: str, n: int = 10, use_llm: bool = False, repair_context: dict | None = None) -> list[Candidate]:
+        request_payload = self._request_payload(objective, category, n, repair_context=repair_context)
         cached = self.cache.get(request_payload)
         if cached.hit and cached.payload:
             response = cached.payload["response"]
@@ -134,18 +134,48 @@ class HypothesisAgent:
             "subindustry": "GICS sub-industry — use ONLY inside group_rank(expr, subindustry) for finer peers",
         }
 
-    def _request_payload(self, objective: str, category: str, n: int) -> dict[str, Any]:
+    def _request_payload(self, objective: str, category: str, n: int, repair_context: dict | None = None) -> dict[str, Any]:
         context = self.kb.rag_context(category)
         # Templates for the target category shown as positive examples
         positive_templates = [
             {"expression": expr, "hypothesis": hyp}
             for expr, hyp in _templates_for_category(category)[:3]
         ]
-        user_content = json.dumps({
+
+        is_repair = repair_context is not None and bool(repair_context.get("expression"))
+        if is_repair:
+            parent_expr = repair_context.get("expression", "")
+            failed_checks = repair_context.get("failedChecks") or []
+            gate_reasons = repair_context.get("gate", {}).get("reasons") or []
+            requirement = (
+                f"REPAIR MODE: Do NOT generate generic alphas. You must produce {n} targeted variants of "
+                f"the parent expression below that fix the specific failures listed. "
+                f"Each variant must preserve the core economic thesis but structurally address the failures. "
+                f"Parent expression: {parent_expr}. "
+                f"Failed checks: {', '.join(failed_checks)}. "
+                f"Gate reasons: {'; '.join(gate_reasons[:3])}. "
+                + _repair_instructions(failed_checks)
+            )
+            user_dict: dict[str, Any] = {
+                "mode": "repair",
+                "parent_expression": parent_expr,
+                "failed_checks": failed_checks,
+                "gate_reasons": gate_reasons,
+                "requirement": requirement,
+            }
+        else:
+            requirement = (
+                f"Generate {n} diverse alphas for the {category} category. "
+                "Each MUST combine data from at least 2 distinct field types "
+                "(fundamentals/price/volume/sentiment). Prefer industry-neutralized expressions."
+            )
+            user_dict = {}
+
+        user_dict.update({
             "objective": objective,
             "category": category,
             "n": n,
-            "requirement": f"Generate {n} diverse alphas for the {category} category. Each MUST combine data from at least 2 distinct field types (fundamentals/price/volume/sentiment). Prefer industry-neutralized expressions.",
+            "requirement": requirement,
             "allowed_operators": sorted(self._get_operators()),
             "allowed_fields": sorted(self._get_fields()),
             "field_semantics": self._get_field_semantics(),
@@ -153,7 +183,8 @@ class HypothesisAgent:
             "positive_context": context.positive,
             "negative_wq101_context": context.negative,
             "failure_patterns_to_avoid": [p["reason"] for p in getattr(context, "failure_patterns", [])],
-        }, ensure_ascii=False)
+        })
+        user_content = json.dumps(user_dict, ensure_ascii=False)
         return {
             "model": self.model,
             "messages": [
@@ -403,3 +434,42 @@ _ALL_TEMPLATES: dict[str, list[tuple[str, str]]] = {
 
 def _templates_for_category(category: str) -> list[tuple[str, str]]:
     return _ALL_TEMPLATES.get(category, _ALL_TEMPLATES["QUALITY"])
+
+
+def _repair_instructions(failed_checks: list[str]) -> str:
+    checks = {c.upper() for c in failed_checks}
+    parts = []
+    if checks & {"SHARPE", "LOW_SHARPE", "FITNESS", "LOW_FITNESS", "DSR"}:
+        parts.append(
+            "LOW_SHARPE/FITNESS fix: add industry neutralization via group_rank(expr, industry); "
+            "blend a complementary signal (e.g., add ts_rank(cashflow_op/assets,252) or ts_delta(est_eps,63)); "
+            "try a different category (QUALITY→MOMENTUM or vice versa)."
+        )
+    if checks & {"HIGH_TURNOVER", "TURNOVER"}:
+        parts.append(
+            "HIGH_TURNOVER fix: replace ts_delta(x,d<10) with ts_mean(x,21) or ts_rank(x,60); "
+            "wrap volatile sub-expressions in ts_mean(x,10); use delay(x,1) on fast signals."
+        )
+    if checks & {"LOW_TURNOVER"}:
+        parts.append(
+            "LOW_TURNOVER fix: use ts_delta(x,5) instead of ts_mean; "
+            "add a faster signal component; shorten the rank window to ≤20 days."
+        )
+    if checks & {"SELF_CORRELATION", "ORTHOGONALITY"}:
+        parts.append(
+            "SELF_CORRELATION fix: you MUST materially change the signal structure — "
+            "switch the primary data source (e.g., from price to fundamentals); "
+            "change the time horizon (short→long or vice versa); "
+            "use regression_neut(expr, existing_signal) to orthogonalize."
+        )
+    if checks & {"LOW_SUB_UNIVERSE_SHARPE"}:
+        parts.append(
+            "LOW_SUB_UNIVERSE_SHARPE fix: use group_rank(expr, subindustry) for finer peer comparison; "
+            "combine with a fundamental ratio to filter low-quality sub-universe stocks."
+        )
+    if checks & {"CONCENTRATED_WEIGHT"}:
+        parts.append(
+            "CONCENTRATED_WEIGHT fix: apply rank() or group_rank() at the outermost level; "
+            "add winsorize() to cap extreme values; combine 2-3 signals additively."
+        )
+    return " ".join(parts)
