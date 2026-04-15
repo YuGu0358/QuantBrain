@@ -109,6 +109,7 @@ const schedulerState = {
   nextRunAt: null,
 };
 
+const SERVER_START_TIME = new Date().toISOString();
 await mkdir(RUNS_DIR, { recursive: true });
 await mkdir(IDEAS_DIR, { recursive: true });
 await mkdir(CREDENTIALS_DIR, { recursive: true });
@@ -145,6 +146,7 @@ const server = createServer(async (req, res) => {
       return sendJson(res, 200, {
         ok: true,
         service: "worldquant-agentic-alpha-lab",
+        startedAt: SERVER_START_TIME,
         scheduler: publicSchedulerState(),
       });
     }
@@ -537,6 +539,9 @@ async function generateScheduledObjective() {
 
 async function tickScheduler() {
   schedulerState.lastTickAt = new Date().toISOString();
+  const qLen = autoLoopState.queue?.length ?? 0;
+  const hasActive = !!autoLoopState.activeRepair;
+  console.log(`[tick] ${schedulerState.lastTickAt} enabled=${schedulerState.enabled} repairQueue=${qLen} activeRepair=${hasActive} runningRuns=${runningRuns().length}`);
 
   // Heal any stuck activeRepair first (e.g. createRun threw before spawning the process)
   if (AUTO_REPAIR_ENABLED) await recoverStuckActiveRepair();
