@@ -39,6 +39,7 @@ def main() -> None:
 
     kb = KnowledgeBase(output_dir / "alpha_pool.db")
     kb.import_wq101_negative_examples(PACKAGE_ROOT / "seeds" / "wq101_alphas.json")
+    _import_submitted_feedback(kb, output_dir.parent / "submitted_alphas.jsonl")
     cache = LLMCache(output_dir / "llm_cache")
     taxonomy = load_taxonomy()
     router = None
@@ -274,6 +275,55 @@ def main() -> None:
             pass
     append_jsonl(progress_path, {"stage": "finished", "summary": summary})
     print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
+
+
+def _import_submitted_feedback(kb: KnowledgeBase, feedback_path: Path) -> int:
+    """Load previously submitted alphas from shared JSONL and add as positive KB examples."""
+    if not feedback_path.exists():
+        return 0
+    count = 0
+    try:
+        for line in feedback_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except Exception:
+                continue
+            expression = entry.get("expression")
+            alpha_id = entry.get("alphaId")
+            i_sharpe = entry.get("isSharpe")
+            if not expression or not alpha_id:
+                continue
+            # Only import alphas with decent IS quality; grade "A"/"B" = strong positive
+            grade = entry.get("grade") or ""
+            is_negative = grade in ("D", "F")
+            sharpe_ok = isinstance(i_sharpe, (int, float)) and i_sharpe >= 0.5
+            if not sharpe_ok and not grade:
+                continue
+            category = entry.get("category") or "QUALITY"
+            sharpe_str = f"{i_sharpe:.3f}" if isinstance(i_sharpe, float) else str(i_sharpe)
+            test_str = f"{entry.get('testSharpe'):.3f}" if isinstance(entry.get("testSharpe"), float) else "pending"
+            hypothesis = (
+                f"Previously submitted to BRAIN with IS Sharpe {sharpe_str}, "
+                f"test Sharpe {test_str}, grade {grade or 'pending'}. "
+                f"Use as {'negative' if is_negative else 'positive'} reference."
+            )
+            kb.upsert_example(
+                item_id=f"submitted_{alpha_id}",
+                expression=expression,
+                category=category,
+                hypothesis=hypothesis,
+                is_negative_example=is_negative,
+                metadata=entry,
+            )
+            count += 1
+    except Exception as exc:
+        print(f"[feedback] failed to load submitted feedback: {exc}", flush=True)
+    if count:
+        print(f"[feedback] loaded {count} submitted alpha(s) into KB", flush=True)
+    return count
 
 
 def _router_token_totals(router) -> dict[str, int]:

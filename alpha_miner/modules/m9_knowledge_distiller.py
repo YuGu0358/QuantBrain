@@ -11,9 +11,20 @@ class KnowledgeDistiller:
             candidate = record.get("candidate", {})
             scorecard = record.get("scorecard", {})
             category = candidate.get("category", "")
-            gate = scorecard.get("gate", "UNKNOWN")
             expression = candidate.get("expression", "")
+            hypothesis = candidate.get("hypothesis", "")
             skeleton = _extract_operator_skeleton(expression)
+
+            # Determine gate result from actual pool record fields
+            bt = record.get("backtest", {}) or {}
+            sharpe = bt.get("sharpe")
+            dsr = record.get("dsr")
+            degraded_qualified = record.get("degradedQualified", False)
+            passed = bool(
+                degraded_qualified
+                or (dsr is not None and dsr >= 0.95)
+            )
+            gate = "PASS" if passed else scorecard.get("gate", "FAIL")
 
             self.kb.record_strategy_stat(
                 category=category,
@@ -24,7 +35,19 @@ class KnowledgeDistiller:
                 self.kb.record_operator_stat(
                     operator=operator,
                     category=category,
-                    passed=gate == "PASS",
+                    passed=passed,
+                )
+
+            # Record passing alphas as positive examples so future runs benefit
+            alpha_id = bt.get("alpha_id") or candidate.get("id", "")
+            if passed and expression and alpha_id and sharpe is not None and sharpe >= 0.5:
+                self.kb.upsert_example(
+                    item_id=f"distilled_{alpha_id}",
+                    expression=expression,
+                    category=category,
+                    hypothesis=hypothesis or f"Passed quality gate with IS Sharpe {sharpe:.3f}.",
+                    is_negative_example=False,
+                    metadata={"sharpe": sharpe, "source": "distilled", "dsr": dsr},
                 )
 
         if self.router is None:
@@ -33,7 +56,7 @@ class KnowledgeDistiller:
         failed = [
             record
             for record in records
-            if record.get("scorecard", {}).get("gate") == "FAIL"
+            if not (record.get("degradedQualified") or (record.get("dsr") or 0) >= 0.95)
         ]
         if not failed:
             return

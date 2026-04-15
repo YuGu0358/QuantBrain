@@ -1696,15 +1696,37 @@ async function submitAlpha(alphaId, options = {}) {
   const text = await response.text();
   const submitResponse = text ? safeJson(text) ?? text : null;
   const after = await fetchAlpha(session, alphaId);
-  recordAutoSubmission(alphaId, summarizeAlpha(after), gate, options.source ?? "manual-submit", ownerId);
+  const summary = summarizeAlpha(after);
+  recordAutoSubmission(alphaId, summary, gate, options.source ?? "manual-submit", ownerId);
   await saveAutoLoopState();
+  // Write to shared feedback file so future Python runs can use this as a positive example
+  void appendSubmittedAlphaFeedback({
+    alphaId,
+    expression: summary.expression ?? after?.regular?.code ?? null,
+    category: options._category ?? null,
+    isSharpe: summary.isSharpe,
+    isFitness: summary.isFitness,
+    testSharpe: summary.testSharpe,
+    grade: summary.grade,
+    submittedAt: new Date().toISOString(),
+    source: options.source ?? "manual-submit",
+  });
   return {
     submitted: true,
     alphaId,
     gate,
     submitResponse,
-    alpha: summarizeAlpha(after),
+    alpha: summary,
   };
+}
+
+async function appendSubmittedAlphaFeedback(entry) {
+  try {
+    const feedbackPath = path.join(RUNS_DIR, "submitted_alphas.jsonl");
+    await writeFile(feedbackPath, JSON.stringify(entry) + "\n", { flag: "a", encoding: "utf8" });
+  } catch (_) {
+    // non-fatal
+  }
 }
 
 async function authenticateBrain(ownerId = "default") {
@@ -1766,6 +1788,7 @@ function evaluateSubmissionGate(alpha) {
   const checks = alpha?.is?.checks ?? [];
   const nonPassChecks = checks.filter((check) => check.result !== "PASS");
   const testSharpe = toNumber(alpha?.test?.sharpe);
+  const isSharpe = toNumber(alpha?.is?.sharpe);
   const reasons = [];
 
   if (status !== "UNSUBMITTED") {
@@ -1779,8 +1802,18 @@ function evaluateSubmissionGate(alpha) {
       `Checks not all PASS: ${nonPassChecks.map((check) => `${check.name}:${check.result}`).join(", ")}.`,
     );
   }
-  if (!Number.isFinite(testSharpe) || testSharpe <= 0) {
-    reasons.push(`testSharpe must be positive, got ${Number.isFinite(testSharpe) ? testSharpe : "missing"}.`);
+  if (Number.isFinite(testSharpe)) {
+    // Case A/B: daily PnL available — require positive OOS test Sharpe
+    if (testSharpe <= 0) {
+      reasons.push(`testSharpe must be positive, got ${testSharpe}.`);
+    }
+  } else {
+    // Case C (degraded): BRAIN regular tier does not provide test.sharpe before
+    // submission. Use IS Sharpe >= 0.5 as proxy gate to allow the factor to be
+    // submitted so BRAIN can evaluate it and return real OOS results.
+    if (!Number.isFinite(isSharpe) || isSharpe < 0.5) {
+      reasons.push(`Degraded mode: IS Sharpe must be >= 0.5, got ${Number.isFinite(isSharpe) ? isSharpe.toFixed(3) : "missing"}.`);
+    }
   }
 
   return {
@@ -1790,6 +1823,8 @@ function evaluateSubmissionGate(alpha) {
     status,
     stage,
     testSharpe: Number.isFinite(testSharpe) ? testSharpe : null,
+    isSharpe: Number.isFinite(isSharpe) ? isSharpe : null,
+    degradedMode: !Number.isFinite(testSharpe),
     checks: checks.map((check) => ({
       name: check.name,
       result: check.result,
