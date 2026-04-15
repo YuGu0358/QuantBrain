@@ -115,14 +115,41 @@ class HypothesisAgent:
             "news_sentiment", "open", "operating_income", "returns", "subindustry", "volume", "vwap",
         ]
 
+    def _get_field_semantics(self) -> dict[str, str]:
+        return {
+            "close": "daily closing price — trend anchor, use for price ratios",
+            "open": "daily opening price — overnight gap = open/delay(close,1)-1",
+            "high": "daily high — resistance proxy, range = high-low",
+            "low": "daily low — support proxy, combine with high for volatility",
+            "vwap": "volume-weighted avg price — institutional anchor; close/vwap>1 = net buying pressure",
+            "returns": "daily log returns — basis for momentum, reversal, volatility signals",
+            "volume": "daily shares traded — attention proxy; volume/adv20 = relative activity vs norm",
+            "adv20": "20-day avg daily volume — liquidity level; ts_rank(adv20,126) = improving liquidity",
+            "assets": "total assets — scale denominator; use as divisor for ROA ratios",
+            "cashflow_op": "operating cash flow — cash earnings quality; cashflow_op/assets = cash ROA",
+            "operating_income": "EBIT — economic profit; operating_income/assets = ROA profitability",
+            "est_eps": "consensus EPS estimate — ts_delta(est_eps,63) = analyst revision momentum",
+            "news_sentiment": "daily NLP sentiment score — ts_zscore(news_sentiment,20) = abnormal attention",
+            "industry": "GICS sector — use ONLY inside group_rank(expr, industry) for sector neutralization",
+            "subindustry": "GICS sub-industry — use ONLY inside group_rank(expr, subindustry) for finer peers",
+        }
+
     def _request_payload(self, objective: str, category: str, n: int) -> dict[str, Any]:
         context = self.kb.rag_context(category)
+        # Templates for the target category shown as positive examples
+        positive_templates = [
+            {"expression": expr, "hypothesis": hyp}
+            for expr, hyp in _templates_for_category(category)[:3]
+        ]
         user_content = json.dumps({
             "objective": objective,
             "category": category,
             "n": n,
+            "requirement": f"Generate {n} diverse alphas for the {category} category. Each MUST combine data from at least 2 distinct field types (fundamentals/price/volume/sentiment). Prefer industry-neutralized expressions.",
             "allowed_operators": sorted(self._get_operators()),
             "allowed_fields": sorted(self._get_fields()),
+            "field_semantics": self._get_field_semantics(),
+            "positive_multi_variable_examples": positive_templates,
             "positive_context": context.positive,
             "negative_wq101_context": context.negative,
             "failure_patterns_to_avoid": [p["reason"] for p in getattr(context, "failure_patterns", [])],
@@ -274,39 +301,102 @@ class HypothesisAgent:
 
 _ALL_TEMPLATES: dict[str, list[tuple[str, str]]] = {
     "QUALITY": [
-        ("group_rank(ts_rank(operating_income / assets, 252), industry)", "Peer-relative profitability rank within industry."),
-        ("rank(ts_rank(cashflow_op / assets, 252) + ts_rank(operating_income / assets, 252))", "Dual quality: cash-flow-backed operating income rank."),
-        ("group_rank(rank(cashflow_op / assets) - rank(ts_mean(cashflow_op / assets, 60)), industry)", "Improving cash generation vs trailing average, industry-neutral."),
-        ("rank(ts_delta(operating_income / assets, 63))", "Quarterly improvement in asset profitability as momentum signal."),
+        # quality × momentum
+        ("group_rank(ts_rank(operating_income / assets, 252) + ts_rank(ts_mean(returns, 63), 63), industry)",
+         "Persistent profitability (year-long ROA rank) combined with industry-relative price momentum. High-quality companies with confirming medium-term price action."),
+        # dual cash quality + improvement
+        ("rank(ts_rank(cashflow_op / assets, 252) + ts_rank(operating_income / assets, 252) + ts_delta(operating_income / assets, 63))",
+         "Triple quality signal: persistent cash-flow quality, persistent earnings quality, and recent improvement in ROA. All three pointing same direction minimizes noise."),
+        # quality × low-vol
+        ("group_rank(ts_rank(operating_income / assets, 252) - ts_rank(ts_std_dev(returns, 60), 252), industry)",
+         "High and persistent profitability combined with low volatility premium within sector. Quality-low-vol combination has historically been less crowded than each alone."),
+        # improving quality + analyst confirmation
+        ("rank(ts_delta(cashflow_op / assets, 126) + ts_delta(est_eps, 63))",
+         "Improving cash ROA over two quarters AND concurrent analyst EPS estimate upgrades. Fundamental improvement confirmed by analyst consensus shift."),
+        # quality × sentiment × neutralized
+        ("group_rank(ts_rank(operating_income / assets, 252) + ts_zscore(news_sentiment, 20), industry)",
+         "Long-term profitability rank within industry, boosted by abnormal near-term news sentiment. Fundamental anchor prevents chasing sentiment noise."),
     ],
     "MOMENTUM": [
-        ("rank(ts_mean(returns, 21) - ts_mean(returns, 252))", "Short-term momentum minus long-term drift."),
-        ("group_rank(ts_mean(returns, 63), industry) - group_rank(ts_mean(returns, 252), industry)", "Industry-relative medium vs long momentum spread."),
-        ("rank(ts_corr(rank(returns), rank(volume), 60))", "Correlation of return rank and volume rank over 60 days."),
+        # volume-confirmed momentum
+        ("group_rank(ts_mean(returns, 63) * ts_rank(volume / adv20, 60), industry)",
+         "Industry-relative 3-month return momentum multiplied by relative volume rank. Volume expansion confirming a trend reduces false breakout noise."),
+        # triple-confirmation momentum
+        ("rank(ts_mean(returns, 63) + ts_zscore(news_sentiment, 20) + ts_delta(est_eps, 21))",
+         "Price momentum, abnormal news sentiment, and analyst EPS revision all aligned. Three independent signals pointing the same direction dramatically increases conviction."),
+        # momentum × fundamental quality filter
+        ("rank(ts_mean(returns, 63) * sign(ts_delta(operating_income / assets, 63)))",
+         "Medium-term momentum only in stocks where fundamentals are actually improving. Eliminates momentum in deteriorating businesses that tend to crash hard."),
+        # medium vs long momentum + volume
+        ("group_rank(ts_mean(returns, 63) - ts_mean(returns, 252) + ts_rank(volume / adv20, 60), industry)",
+         "Medium-minus-long momentum spread (captures acceleration) plus volume participation relative to sector. Sector-neutralized to avoid industry beta contamination."),
+        # residual momentum post-reversal hedge
+        ("rank(ts_mean(returns, 63) - ts_mean(returns, 5) + ts_delta(est_eps, 63))",
+         "Medium-term momentum hedged against short-term reversal, with analyst upgrade support. Reduces whipsaw from overextended short-term moves while keeping earnings-backed trend."),
     ],
     "REVERSAL": [
-        ("rank(-ts_mean(returns, 5))", "Short-term weekly return reversal."),
-        ("rank(ts_delta(volume, 20)) * rank(-returns)", "Volume spike with price reversal signal."),
-        ("rank(-ts_zscore(returns, 20))", "Z-score reversal: extreme moves revert over 20 days."),
+        # capitulation reversal with volume
+        ("rank(-ts_mean(returns, 5) * ts_rank(volume / adv20, 20))",
+         "Weekly reversal signal amplified by high relative volume. High volume down-moves suggest capitulation and mean-reversion entry; low-volume moves are less reliable."),
+        # Z-score reversal with quality filter
+        ("group_rank(-ts_zscore(returns, 20) + ts_rank(operating_income / assets, 126), industry)",
+         "Statistical return overreaction (Z-score extremes revert) combined with underlying quality rank. Buying oversold high-quality companies within sector is historically robust."),
+        # reversal × sentiment normalization
+        ("rank(-ts_mean(returns, 5) - ts_zscore(news_sentiment, 5))",
+         "Short-term price reversal combined with reversal of abnormally negative news sentiment. Both price and news overreactions tend to revert to mean together."),
+        # overnight gap reversal
+        ("rank(-ts_mean(open / delay(close, 1) - 1, 10) + ts_mean(returns, 5))",
+         "Mean-reversion of persistent negative overnight gaps, combined with intraday momentum. Overnight weakness that doesn't propagate intraday is typically overpriced."),
     ],
     "LIQUIDITY": [
-        ("rank(ts_mean(adv20, 60) / adv20)", "Relative liquidity trend: improving availability."),
-        ("group_rank(-ts_std_dev(volume / adv20, 20), industry)", "Stable volume relative to peers signals lower friction."),
+        # liquidity trend × fundamental quality
+        ("group_rank(ts_rank(adv20, 126) + ts_rank(operating_income / assets, 252), industry)",
+         "Rising liquidity trend over half year combined with profitability rank within sector. Improving institutional interest (volume) in fundamentally strong companies."),
+        # volume stability × momentum direction
+        ("rank(-ts_std_dev(volume / adv20, 20) * sign(ts_mean(returns, 21)))",
+         "Stable volume participation (low noise) in the direction of momentum. Consistent buying interest without volatility spikes signals cleaner institutional accumulation."),
+        # Amihud-proxy × reversal
+        ("group_rank(-ts_mean(abs(returns) / volume, 20) + ts_rank(adv20, 63), industry)",
+         "Low price-impact (Amihud illiquidity proxy inverted) combined with improving liquidity trend. Stocks becoming more liquid while showing low friction command liquidity premium."),
     ],
     "VOLATILITY": [
-        ("rank(-ts_std_dev(returns, 60))", "Low-volatility premium over 60-day window."),
-        ("rank(-ts_std_dev(returns, 20) + ts_mean(returns, 20))", "Low vol combined with positive short return."),
-        ("group_rank(-ts_std_dev(returns, 60), industry)", "Industry-relative low volatility."),
+        # low-vol × quality
+        ("group_rank(-ts_std_dev(returns, 60) + ts_rank(cashflow_op / assets, 252), industry)",
+         "Low idiosyncratic volatility within sector combined with cash flow quality rank. Stable cash earnings businesses with low return noise: two independent risk-reduction signals."),
+        # vol-of-vol × returns
+        ("rank(-ts_std_dev(ts_std_dev(returns, 20), 20) + ts_mean(returns, 63))",
+         "Low second-order volatility (vol-of-vol) combined with positive medium return. Stocks with stable, predictable risk profile and positive drift are less crowded than pure low-vol."),
+        # declining volatility trend with sentiment
+        ("group_rank(ts_delta(-ts_std_dev(returns, 20), 20) + ts_zscore(news_sentiment, 20), industry)",
+         "Improving (declining) volatility trend combined with positive news sentiment within sector. Calm-down + positive news: risk-off positioning unwind signal."),
     ],
     "MICROSTRUCTURE": [
-        ("rank(close / vwap - 1)", "Close-to-VWAP ratio: buying pressure indicator."),
-        ("rank(ts_mean(close / vwap - 1, 10))", "10-day persistent VWAP premium signal."),
-        ("rank(ts_corr(returns, ts_delta(volume, 1), 20))", "Price-volume correlation over 20 days."),
+        # VWAP × volume × fundamentals
+        ("rank(ts_mean(close / vwap - 1, 10) * ts_rank(volume / adv20, 20))",
+         "Sustained price strength above institutional VWAP anchor, multiplied by elevated relative volume. Institutional buying pushes both close/VWAP ratio and volume above normal simultaneously."),
+        # price-volume correlation × EPS
+        ("group_rank(ts_corr(close / vwap - 1, volume / adv20, 20) + ts_delta(est_eps, 63), industry)",
+         "Stocks where VWAP premium correlates with volume surge (demand-supply alignment) AND analysts are raising EPS estimates. Microstructure confirming fundamental upgrade."),
+        # open-close intraday momentum × news
+        ("rank(ts_mean(close / open - 1, 10) + ts_zscore(news_sentiment, 20))",
+         "Persistent intraday upward drift (open-to-close return) combined with abnormal positive sentiment. Intraday buying pressure sustained over weeks with news catalyst."),
+        # high-low range contraction + volume surge
+        ("rank(-ts_mean((high - low) / vwap, 10) * ts_rank(volume / adv20, 20))",
+         "Contracting daily price range (consolidation) with expanding relative volume: classic pre-breakout microstructure. Tightening range + volume pickup signals potential directional move."),
     ],
     "SENTIMENT": [
-        ("rank(ts_zscore(news_sentiment, 20))", "Abnormal sentiment Z-score over 20 days."),
-        ("group_rank(ts_mean(news_sentiment, 5), industry)", "Relative near-term sentiment within industry."),
-        ("rank(ts_delta(est_eps, 63))", "Quarterly change in EPS estimates as analyst sentiment."),
+        # EPS revision × price momentum × fundamental anchor
+        ("group_rank(ts_delta(est_eps, 63) + ts_mean(returns, 63) + ts_rank(operating_income / assets, 126), industry)",
+         "EPS estimate upgrades, confirming price momentum, on companies with solid existing profitability. All three pillars aligned sector-neutral reduces false positives from speculative upward revisions."),
+        # abnormal sentiment × volume × reversal hedge
+        ("rank(ts_zscore(news_sentiment, 20) + ts_rank(volume / adv20, 20) - ts_mean(returns, 5))",
+         "Abnormal positive news sentiment combined with high relative volume, hedged by short-term reversal. News + volume confirms signal; subtracting recent return avoids chasing spike."),
+        # analyst divergence × price
+        ("rank(ts_delta(est_eps, 21) * sign(ts_mean(returns, 21)))",
+         "EPS estimate revision in the same direction as recent price: analyst and market confirming each other. Cross-confirmation reduces noise from analyst upgrades that market already discounts."),
+        # sentiment persistence × liquidity × quality
+        ("group_rank(ts_mean(news_sentiment, 21) + ts_rank(adv20, 63) + ts_rank(cashflow_op / assets, 252), industry)",
+         "Sustained positive news coverage over a month, rising liquidity, and fundamental cash quality within sector. Three-pillar signal requiring all dimensions positive simultaneously."),
     ],
 }
 
