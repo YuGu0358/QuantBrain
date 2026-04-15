@@ -51,6 +51,7 @@ const DEFAULT_BATCH_SIZE = Number(process.env.AUTO_RUN_BATCH_SIZE ?? 3);
 const DEFAULT_ROUNDS = Number(process.env.AUTO_RUN_ROUNDS ?? 1);
 const DEFAULT_CONCURRENCY = clampInt(process.env.AUTO_RUN_CONCURRENCY, 3, 1, 3);
 const AUTO_LOOP_STATE_PATH = path.join(RUNS_DIR, "auto-loop-state.json");
+const SCHEDULER_STATE_PATH = path.join(RUNS_DIR, "scheduler-state.json");
 const AUTO_REPAIR_ENABLED = process.env.AUTO_REPAIR_ENABLED !== "false";
 const AUTO_REPAIR_ENGINE = normalizeEngine(process.env.AUTO_REPAIR_ENGINE ?? "python-v2");
 const AUTO_REPAIR_MAX_ROUNDS = clampInt(process.env.AUTO_REPAIR_MAX_ROUNDS, 3, 1, 10);
@@ -58,7 +59,7 @@ const AUTO_REPAIR_BATCH_SIZE = clampInt(process.env.AUTO_REPAIR_BATCH_SIZE, 5, 1
 const REPAIR_TARGET_SHARPE = parseFloat(process.env.REPAIR_TARGET_SHARPE ?? "1.25");
 const REPAIR_TARGET_FITNESS = parseFloat(process.env.REPAIR_TARGET_FITNESS ?? "1.0");
 const REPAIR_TARGET_TURNOVER = parseFloat(process.env.REPAIR_TARGET_TURNOVER ?? "0.40");
-const AUTO_SUBMIT_ENABLED = process.env.AUTO_SUBMIT_ENABLED === "true";
+const AUTO_SUBMIT_ENABLED = process.env.AUTO_SUBMIT_ENABLED !== "false";
 const ALPHA_GENERATOR_STRATEGY = ["legacy", "diversity-v2"].includes(process.env.ALPHA_GENERATOR_STRATEGY)
   ? process.env.ALPHA_GENERATOR_STRATEGY
   : "legacy";
@@ -93,7 +94,7 @@ const DEFAULT_SIM_SETTINGS = {
 };
 
 const schedulerState = {
-  enabled: process.env.AUTO_RUN_ENABLED === "true",
+  enabled: process.env.AUTO_RUN_ENABLED !== "false",
   engine: normalizeEngine(DEFAULT_ENGINE),
   mode: DEFAULT_MODE,
   objective: DEFAULT_OBJECTIVE,
@@ -114,6 +115,7 @@ await mkdir(CREDENTIALS_DIR, { recursive: true });
 const userRegistry = await loadUserRegistry();
 let autoLoopState = await loadAutoLoopState();
 objectiveHistory = (await maybeReadJson(OBJECTIVE_HISTORY_PATH)) ?? [];
+await loadSchedulerState();
 scheduleNextRun("startup");
 // On startup: if repair queue has items from a previous session, drain immediately
 if (AUTO_REPAIR_ENABLED && autoLoopState.queue.length > 0) {
@@ -292,6 +294,7 @@ const server = createServer(async (req, res) => {
         schedulerState.simulationSettings = merged;
       }
       scheduleNextRun("scheduler-update");
+      void saveSchedulerState();
       return sendJson(res, 200, publicSchedulerState());
     }
 
@@ -1780,6 +1783,35 @@ function pushRepairHistory(entry) {
 
 async function saveAutoLoopState() {
   await writeFile(AUTO_LOOP_STATE_PATH, `${JSON.stringify(autoLoopState, null, 2)}\n`, "utf8");
+}
+
+async function saveSchedulerState() {
+  const toSave = {
+    enabled: schedulerState.enabled,
+    engine: schedulerState.engine,
+    mode: schedulerState.mode,
+    objective: schedulerState.objective,
+    intervalMinutes: schedulerState.intervalMinutes,
+    rounds: schedulerState.rounds,
+    batchSize: schedulerState.batchSize,
+    concurrency: schedulerState.concurrency,
+    simulationSettings: schedulerState.simulationSettings,
+  };
+  await writeFile(SCHEDULER_STATE_PATH, `${JSON.stringify(toSave, null, 2)}\n`, "utf8");
+}
+
+async function loadSchedulerState() {
+  const saved = await maybeReadJson(SCHEDULER_STATE_PATH);
+  if (!saved) return;
+  if (typeof saved.enabled === "boolean") schedulerState.enabled = saved.enabled;
+  if (saved.engine) schedulerState.engine = normalizeEngine(saved.engine);
+  if (saved.mode) schedulerState.mode = normalizeMode(saved.mode);
+  if (typeof saved.objective === "string") schedulerState.objective = saved.objective;
+  if (typeof saved.intervalMinutes === "number") schedulerState.intervalMinutes = saved.intervalMinutes;
+  if (typeof saved.rounds === "number") schedulerState.rounds = saved.rounds;
+  if (typeof saved.batchSize === "number") schedulerState.batchSize = saved.batchSize;
+  if (typeof saved.concurrency === "number") schedulerState.concurrency = clampInt(saved.concurrency, schedulerState.concurrency, 1, 3);
+  if (saved.simulationSettings && typeof saved.simulationSettings === "object") schedulerState.simulationSettings = { ...DEFAULT_SIM_SETTINGS, ...saved.simulationSettings };
 }
 
 function pushAutoLoopEvent(event) {
