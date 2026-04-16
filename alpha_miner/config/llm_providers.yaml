@@ -22,34 +22,34 @@ providers:
     weight_initial: 1.0
 
   # --- JUDGE ---
-  gpt4o_mini_judge:
+  claude_opus_judge:
     role: judge
-    model_id: gpt-4o-mini
-    api_base: null
-    api_key_env: OPENAI_API_KEY
-    client_type: openai_compat
-    cost_per_1k_input: 0.00015
-    cost_per_1k_output: 0.00060
-    weight_initial: 1.0
-
-  # --- DISTILL ---
-  gpt4o_mini_distill:
-    role: distill
-    model_id: gpt-4o-mini
-    api_base: null
-    api_key_env: OPENAI_API_KEY
-    client_type: openai_compat
-    cost_per_1k_input: 0.00015
-    cost_per_1k_output: 0.00060
-    weight_initial: 1.0
-
-  # --- IDEA ---
-  claude_sonnet_idea:
-    role: idea
-    model_id: claude-sonnet-4-6
+    model_id: claude-opus-4-7
     api_base: null
     api_key_env: ANTHROPIC_API_KEY
     client_type: anthropic
-    cost_per_1k_input: 0.003
-    cost_per_1k_output: 0.015
+    cost_per_1k_input: 0.015
+    cost_per_1k_output: 0.075
+    weight_initial: 1.0
+
+  # --- DISTILL ---
+  claude_opus_distill:
+    role: distill
+    model_id: claude-opus-4-7
+    api_base: null
+    api_key_env: ANTHROPIC_API_KEY
+    client_type: anthropic
+    cost_per_1k_input: 0.015
+    cost_per_1k_output: 0.075
+    weight_initial: 1.0
+
+  # --- IDEA ---
+  claude_opus_idea:
+    role: idea
+    model_id: claude-opus-4-7
+    api_base: null
+    api_key_env: ANTHROPIC_API_KEY
+    client_type: anthropic
+    cost_per_1k_input: 0.015
+    cost_per_1k_output: 0.075
     weight_initial: 1.0
