@@ -106,11 +106,11 @@ class Planner:
     def _pick_provider(self):
         if self.router is None:
             return None
-        for role in ("repair", "generate", "judge"):
-            providers = [p for p in self.router.providers.values() if p.role == role]
-            if providers:
-                return providers[0]
-        return None
+        try:
+            for role in ("repair", "generate", "judge"):
+                return self.router.pick(role)
+        except Exception:
+            return None
 
 
 def _extract_json(raw: str) -> dict:
