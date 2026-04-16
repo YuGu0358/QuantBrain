@@ -28,8 +28,11 @@ const DASHBOARD_USERS = parseDashboardUsers(process.env.DASHBOARD_USERS ?? "");
 const REGISTRATION_CODE = process.env.REGISTRATION_CODE ?? "";
 const OPENAI_IDEA_MODEL = process.env.OPENAI_IDEA_MODEL ?? "gpt-4o-mini";
 const OPENAI_OPTIMIZE_MODEL = "gpt-4o-mini";
+const OPENAI_PLANNER_MODEL = "gpt-5.4-2026-03-05";
 const OPTIMIZE_IDEA_SYSTEM_PROMPT =
   'You are a WorldQuant BRAIN alpha research specialist. Convert the user idea into a structured research direction. Return strict JSON: {"objective":string,"category":one of QUALITY/MOMENTUM/REVERSAL/LIQUIDITY/VOLATILITY/MICROSTRUCTURE/SENTIMENT,"hypothesis":string,"constraints":[string],"suggested_data_fields":[string]}';
+const LLM_PLANNER_SYSTEM_PROMPT =
+  'You are a WorldQuant BRAIN alpha mining strategist. Analyze the current alpha library state and recent results to decide optimal parameters for the next mining run. Return ONLY valid JSON with this schema: {"objective":"specific 2-3 sentence hypothesis to investigate — pick novel angles not yet explored","rounds":number 1-3,"batchSize":number 5-15,"simulationSettings":{"region":"USA","universe":"TOP3000 or TOP1000 or TOP500","delay":1 or 2,"decay":number 0-13,"neutralization":"INDUSTRY or SUBINDUSTRY or MARKET","truncation":number 0.01-0.1,"pasteurization":"ON","unitHandling":"VERIFY"},"reasoning":"1-2 sentences why these params"}';
 const OPTIMIZE_IDEA_CATEGORIES = new Set([
   "QUALITY",
   "MOMENTUM",
@@ -537,6 +540,141 @@ async function generateScheduledObjective() {
   return objective;
 }
 
+function normalizePlannerPlan(parsed) {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Planner response is not a JSON object.");
+  }
+
+  const objective = String(parsed.objective ?? "").trim();
+  const reasoning = String(parsed.reasoning ?? "").trim();
+  const rounds = Number(parsed.rounds);
+  const batchSize = Number(parsed.batchSize);
+  const s = parsed.simulationSettings;
+
+  if (!objective) throw new Error("Planner response is missing objective.");
+  if (!Number.isInteger(rounds) || rounds < 1 || rounds > 3) {
+    throw new Error(`Planner response has invalid rounds: ${parsed.rounds}`);
+  }
+  if (!Number.isInteger(batchSize) || batchSize < 5 || batchSize > 15) {
+    throw new Error(`Planner response has invalid batchSize: ${parsed.batchSize}`);
+  }
+  if (!s || typeof s !== "object" || Array.isArray(s)) {
+    throw new Error("Planner response is missing simulationSettings.");
+  }
+
+  const simulationSettings = {
+    region: String(s.region ?? "").toUpperCase(),
+    universe: String(s.universe ?? "").toUpperCase(),
+    delay: Number(s.delay),
+    decay: Number(s.decay),
+    neutralization: String(s.neutralization ?? "").toUpperCase(),
+    truncation: Number(s.truncation),
+    pasteurization: String(s.pasteurization ?? "").toUpperCase(),
+    unitHandling: String(s.unitHandling ?? "").toUpperCase(),
+  };
+
+  if (simulationSettings.region !== "USA") {
+    throw new Error(`Planner response has invalid region: ${s.region}`);
+  }
+  if (!["TOP3000", "TOP1000", "TOP500"].includes(simulationSettings.universe)) {
+    throw new Error(`Planner response has invalid universe: ${s.universe}`);
+  }
+  if (![1, 2].includes(simulationSettings.delay)) {
+    throw new Error(`Planner response has invalid delay: ${s.delay}`);
+  }
+  if (!Number.isFinite(simulationSettings.decay) || simulationSettings.decay < 0 || simulationSettings.decay > 13) {
+    throw new Error(`Planner response has invalid decay: ${s.decay}`);
+  }
+  if (!["INDUSTRY", "SUBINDUSTRY", "MARKET"].includes(simulationSettings.neutralization)) {
+    throw new Error(`Planner response has invalid neutralization: ${s.neutralization}`);
+  }
+  if (!Number.isFinite(simulationSettings.truncation) || simulationSettings.truncation < 0.01 || simulationSettings.truncation > 0.1) {
+    throw new Error(`Planner response has invalid truncation: ${s.truncation}`);
+  }
+  if (simulationSettings.pasteurization !== "ON") {
+    throw new Error(`Planner response has invalid pasteurization: ${s.pasteurization}`);
+  }
+  if (simulationSettings.unitHandling !== "VERIFY") {
+    throw new Error(`Planner response has invalid unitHandling: ${s.unitHandling}`);
+  }
+
+  return {
+    objective,
+    rounds,
+    batchSize,
+    simulationSettings,
+    reasoning,
+  };
+}
+
+async function planNextRunWithLLM() {
+  try {
+    if (!process.env.OPENAI_API_KEY) {
+      throw new Error("OPENAI_API_KEY is not configured.");
+    }
+
+    const alphaLibrary = await buildAlphaLibrary();
+    const categoryCounts = {};
+    let sharpeSum = 0;
+    let sharpeCount = 0;
+    for (const entry of alphaLibrary.entries) {
+      const category = entry.category || "UNKNOWN";
+      categoryCounts[category] = (categoryCounts[category] ?? 0) + 1;
+      const sharpe = Number(entry.sharpe);
+      if (Number.isFinite(sharpe)) {
+        sharpeSum += sharpe;
+        sharpeCount += 1;
+      }
+    }
+
+    const context = {
+      repairHistory: (autoLoopState.repairHistory ?? []).slice(-20),
+      alphaLibrary: {
+        total: alphaLibrary.total,
+        categoryCounts,
+        avgSharpe: sharpeCount ? Number((sharpeSum / sharpeCount).toFixed(4)) : null,
+      },
+      events: (autoLoopState.events ?? []).slice(-30),
+      engine: schedulerState.engine,
+    };
+
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: OPENAI_PLANNER_MODEL,
+        messages: [
+          { role: "system", content: LLM_PLANNER_SYSTEM_PROMPT },
+          { role: "user", content: JSON.stringify(context) },
+        ],
+        max_completion_tokens: 1000,
+      }),
+    });
+
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(`OpenAI planner failed with ${response.status}: ${JSON.stringify(payload)}`);
+    }
+
+    const content = payload?.choices?.[0]?.message?.content?.trim();
+    if (!content) {
+      throw new Error("OpenAI planner returned no message content.");
+    }
+
+    const parsed = JSON.parse(content);
+    const plan = normalizePlannerPlan(parsed);
+    autoLoopState.llmPlan = { ...parsed, ...plan, decidedAt: new Date().toISOString() };
+    await saveAutoLoopState();
+    return plan;
+  } catch (error) {
+    console.error("[planner] error", error);
+    return null;
+  }
+}
+
 async function tickScheduler() {
   schedulerState.lastTickAt = new Date().toISOString();
   const qLen = autoLoopState.queue?.length ?? 0;
@@ -562,20 +700,25 @@ async function tickScheduler() {
     return;
   }
 
-  // Generate a fresh, evolving objective for each scheduled run
-  const dynamicObjective = await generateScheduledObjective();
-  schedulerState.objective = dynamicObjective;
+  const plan = await planNextRunWithLLM();
+  console.log("[planner] LLM strategy: " + (plan?.objective || "").slice(0, 80));
+  const dynamicObjective = plan ? null : await generateScheduledObjective();
+  const runObjective = plan?.objective || dynamicObjective;
+  const runRounds = plan?.rounds ?? schedulerState.rounds;
+  const runBatchSize = plan?.batchSize ?? schedulerState.batchSize;
+  const runSimulationSettings = plan?.simulationSettings ?? schedulerState.simulationSettings;
+  schedulerState.objective = runObjective;
 
   const state = await createRun(
     {
       runId: `scheduled-mining-${new Date().toISOString().replaceAll(":", "-").replace(/\.\d{3}Z$/, "Z")}`,
       mode: schedulerState.mode,
       engine: schedulerState.engine,
-      objective: dynamicObjective,
-      rounds: schedulerState.rounds,
-      batchSize: schedulerState.batchSize,
+      objective: runObjective,
+      rounds: runRounds,
+      batchSize: runBatchSize,
       concurrency: schedulerState.concurrency,
-      simulationSettings: schedulerState.simulationSettings,
+      simulationSettings: runSimulationSettings,
       ownerId: AUTO_RUN_OWNER_ID,
     },
     "scheduler",
@@ -1764,6 +1907,7 @@ function publicAutoLoopState(authContext = systemAuthContext()) {
     events: events.slice(-30).reverse(),
     repairHistory: (autoLoopState.repairHistory ?? []).slice(-20).reverse(),
     diversityStats: autoLoopState.diversityStats ?? null,
+    llmPlan: autoLoopState.llmPlan ?? null,
     lastAction: autoLoopState.lastAction,
     statePath: AUTO_LOOP_STATE_PATH,
   };
@@ -1778,6 +1922,7 @@ async function loadAutoLoopState() {
     events: Array.isArray(persisted?.events) ? persisted.events.slice(-100) : [],
     repairHistory: Array.isArray(persisted?.repairHistory) ? persisted.repairHistory.slice(-50) : [],
     diversityStats: persisted?.diversityStats ?? null,
+    llmPlan: persisted?.llmPlan ?? null,
     lastAction: persisted?.lastAction ?? null,
   };
 }
@@ -2931,6 +3076,10 @@ body{display:flex}
       <div class="kpi"><div class="kpi-label">修复队列</div><div class="kpi-val" id="k-repair">–</div><div class="kpi-sub" id="k-sub3"></div></div>
       <div class="kpi"><div class="kpi-label">今日花费</div><div class="kpi-val" id="k-spend">–</div><div class="kpi-sub" id="k-sub4">上限 $3.60</div></div>
     </div>
+    <div class="box" style="margin-bottom:20px">
+      <div class="box-title">LLM 策略规划</div>
+      <div id="llm-plan-card"><div style="font-size:12px;color:var(--t3)">下次挖掘开始前 LLM 将自动制定策略</div></div>
+    </div>
     <div class="grid3">
       <div class="box">
         <div class="box-title">Alpha 流水线 — 实时</div>
@@ -3392,6 +3541,36 @@ body{display:flex}
       if (ksp && lr) ksp.textContent = '$' + (lr.spent_usd ?? 0).toFixed(2);
       var ks4 = $('k-sub4');
       if (ks4 && lr) ks4.textContent = '上限 $' + (lr.daily_budget_usd ?? 3.6).toFixed(2);
+
+      var lpc = $('llm-plan-card');
+      if (lpc) {
+        var llmPlan = d.autoLoop?.llmPlan || null;
+        if (llmPlan) {
+          var psim = llmPlan.simulationSettings || {};
+          var objective = String(llmPlan.objective || '');
+          var objectiveShort = objective.slice(0, 200) + (objective.length > 200 ? '\u2026' : '');
+          var decidedAt = '\u2013';
+          if (llmPlan.decidedAt) {
+            var decidedDate = new Date(llmPlan.decidedAt);
+            if (!isNaN(decidedDate.getTime())) {
+              decidedAt = decidedDate.toLocaleString([], { month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' });
+            }
+          }
+          var planBadges = [];
+          if (psim.universe) planBadges.push('<span class="badge run">' + esc(psim.universe) + '</span>');
+          if (psim.decay != null) planBadges.push('<span class="badge done">DECAY ' + esc(psim.decay) + '</span>');
+          if (psim.neutralization) planBadges.push('<span class="badge pass">' + esc(psim.neutralization) + '</span>');
+          lpc.innerHTML = '<div style="display:flex;flex-direction:column;gap:10px">' +
+            '<div style="font-size:13px;color:var(--t1);line-height:1.55">' + esc(objectiveShort) + '</div>' +
+            '<div style="font-size:12px;color:var(--t2);line-height:1.5">' + esc(llmPlan.reasoning || '\u2013') + '</div>' +
+            '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">' + planBadges.join('') +
+              '<span style="font-size:11px;color:var(--t3);margin-left:auto">制定于 ' + esc(decidedAt) + '</span>' +
+            '</div>' +
+          '</div>';
+        } else {
+          lpc.innerHTML = '<div style="font-size:12px;color:var(--t3)">下次挖掘开始前 LLM 将自动制定策略</div>';
+        }
+      }
 
       // Pipeline stages — parse from active run logs
       // Note: [gate-pass]/[gate-fail] are never emitted; python-v2 stdout has no stage lines
