@@ -1,34 +1,24 @@
 providers:
   # --- GENERATION ---
-  gpt4o_generate:
+  gpt45_generate:
     role: generate
-    model_id: gpt-4o
+    model_id: gpt-4.5-preview
     api_base: null
     api_key_env: OPENAI_API_KEY
     client_type: openai_compat
-    cost_per_1k_input: 0.0025
-    cost_per_1k_output: 0.01000
-    weight_initial: 0.6
+    cost_per_1k_input: 0.075
+    cost_per_1k_output: 0.150
+    weight_initial: 1.0
 
-  gemini_flash:
-    role: generate
-    model_id: gemini-2.0-flash
-    api_base: https://generativelanguage.googleapis.com/v1beta/openai/
-    api_key_env: GEMINI_API_KEY
-    client_type: openai_compat
-    cost_per_1k_input: 0.000075
-    cost_per_1k_output: 0.00030
-    weight_initial: 0.4
-
-  # --- REPAIR (use best reasoning model) ---
-  o4_mini_repair:
+  # --- REPAIR ---
+  gpt45_repair:
     role: repair
-    model_id: o4-mini
+    model_id: gpt-4.5-preview
     api_base: null
     api_key_env: OPENAI_API_KEY
     client_type: openai_compat
-    cost_per_1k_input: 0.00110
-    cost_per_1k_output: 0.00440
+    cost_per_1k_input: 0.075
+    cost_per_1k_output: 0.150
     weight_initial: 1.0
 
   # --- JUDGE ---

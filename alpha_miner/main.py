@@ -59,7 +59,7 @@ def main() -> None:
         model=os.environ.get("OPENAI_IDEA_MODEL", "gpt-4o-mini"),
         temperature=float(generation_cfg.get("temperature", 0.4)),
         top_p=float(generation_cfg.get("top_p", 0.9)),
-        max_tokens=int(generation_cfg.get("max_tokens", 800)),
+        max_tokens=int(generation_cfg.get("max_tokens", 2000)),
         seed=int(generation_cfg.get("seed", 42)),
         router=router,
         use_llm=(router is not None),
