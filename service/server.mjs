@@ -57,7 +57,7 @@ const AUTO_LOOP_STATE_PATH = path.join(RUNS_DIR, "auto-loop-state.json");
 const SCHEDULER_STATE_PATH = path.join(RUNS_DIR, "scheduler-state.json");
 const AUTO_REPAIR_ENABLED = process.env.AUTO_REPAIR_ENABLED !== "false";
 const AUTO_REPAIR_ENGINE = normalizeEngine(process.env.AUTO_REPAIR_ENGINE ?? "python-v2");
-const AUTO_REPAIR_MAX_ROUNDS = clampInt(process.env.AUTO_REPAIR_MAX_ROUNDS, 3, 1, 10);
+const AUTO_REPAIR_MAX_ROUNDS = clampInt(process.env.AUTO_REPAIR_MAX_ROUNDS, 5, 1, 10);
 const AUTO_REPAIR_BATCH_SIZE = clampInt(process.env.AUTO_REPAIR_BATCH_SIZE, 5, 1, 10);
 const REPAIR_TARGET_SHARPE = parseFloat(process.env.REPAIR_TARGET_SHARPE ?? "1.25");
 const REPAIR_TARGET_FITNESS = parseFloat(process.env.REPAIR_TARGET_FITNESS ?? "1.0");
@@ -1736,7 +1736,14 @@ function chooseRepairCandidate(candidates) {
 
 function chooseRepairCandidates(candidates, maxItems = 3) {
   return candidates
-    .filter((candidate) => candidate.alphaId && !evaluateCandidateGate(candidate).ok)
+    .filter((candidate) => {
+      if (!candidate.alphaId) return false;
+      const gate = evaluateCandidateGate(candidate);
+      if (gate.ok) return false;
+      // Only repair when exactly one BRAIN check failed — more failures need regeneration
+      const failed = failedCheckNames(gate);
+      return failed.length === 1;
+    })
     .sort((left, right) => repairPriority(right) - repairPriority(left))
     .slice(0, maxItems);
 }
