@@ -10,6 +10,9 @@ from typing import Any
 
 from alpha_miner.modules.llm_router import LLMRouter
 from alpha_miner.modules.m9_knowledge_distiller import KnowledgeDistiller
+from alpha_miner.modules.m_diagnoser import Diagnoser
+from alpha_miner.modules.m_distiller import Distiller
+from alpha_miner.modules.m_repair_memory import RepairMemory
 
 from .modules.common import PACKAGE_ROOT, append_jsonl, read_json, set_seed, write_json
 from .modules.config_loader import load_config, load_taxonomy
@@ -102,7 +105,45 @@ def main() -> None:
         except Exception:
             repair_ctx = None
 
-    candidates = agent.generate_batch(effective_objective, category=category, n=batch_size, use_llm=args.use_llm, repair_context=repair_ctx)
+    repair_memory: RepairMemory | None = None
+    if repair_ctx is not None:
+        repair_memory_path = output_dir.parent / "repair_memory.db"
+        repair_memory = RepairMemory(repair_memory_path)
+        agent.repair_memory = repair_memory
+
+    diagnosis = None
+    if repair_ctx is not None and router is not None:
+        diagnoser = Diagnoser(router)
+        metrics = {
+            "sharpe": repair_ctx.get("metrics", {}).get("isSharpe") or repair_ctx.get("metrics", {}).get("sharpe"),
+            "fitness": repair_ctx.get("metrics", {}).get("isFitness") or repair_ctx.get("metrics", {}).get("fitness"),
+            "turnover": repair_ctx.get("metrics", {}).get("turnover"),
+            "max_abs_correlation": repair_ctx.get("metrics", {}).get("max_abs_correlation"),
+        }
+        diagnosis = diagnoser.diagnose(
+            expression=repair_ctx.get("expression", ""),
+            metrics=metrics,
+            failed_checks=repair_ctx.get("failedChecks") or [],
+            gate_reasons=(repair_ctx.get("gate") or {}).get("reasons") or [],
+        )
+        append_jsonl(
+            progress_path,
+            {
+                "stage": "diagnosis",
+                "primary_symptom": diagnosis.primary_symptom,
+                "secondary_symptoms": diagnosis.secondary_symptoms,
+                "repair_priorities": diagnosis.repair_priorities,
+            },
+        )
+
+    candidates = agent.generate_batch(
+        effective_objective,
+        category=category,
+        n=batch_size,
+        use_llm=args.use_llm,
+        repair_context=repair_ctx,
+        diagnosis=diagnosis,
+    )
 
     validator_records = []
     valid_candidates = []
@@ -206,6 +247,27 @@ def main() -> None:
             evaluated_records.append(record)
             append_jsonl(progress_path, {"stage": "evaluated", "candidate_id": candidate.id, "status": result.status})
 
+    if repair_ctx is not None and router is not None and diagnosis is not None and repair_memory is not None:
+        distiller = Distiller(router, repair_memory)
+        tried = [
+            {
+                "expression": r["candidate"]["expression"],
+                "sharpe": r.get("backtest", {}).get("sharpe"),
+                "fitness": r.get("backtest", {}).get("fitness"),
+                "turnover": r.get("backtest", {}).get("turnover"),
+                "accepted": r.get("dsr") is not None and r.get("orthogonality", {}).get("passed", False),
+            }
+            for r in evaluated_records
+        ]
+        accepted_expr = next((item["expression"] for item in tried if item["accepted"]), None)
+        distiller.distill(
+            original_expression=repair_ctx.get("expression", ""),
+            diagnosis=diagnosis,
+            tried_candidates=tried,
+            accepted_expression=accepted_expr,
+        )
+        append_jsonl(progress_path, {"stage": "distilled", "accepted": accepted_expr is not None})
+
     portfolio = optimizer.optimize(portfolio_pool)
     write_json(output_dir / "portfolio.json", asdict(portfolio))
     pool_payload = {
@@ -254,8 +316,6 @@ def main() -> None:
     write_json(output_dir / "summary.json", summary)
     if os.environ.get("KNOWLEDGE_DISTILL_ENABLED", "false").lower() == "true" and router is not None:
         try:
-            from alpha_miner.modules.common import read_json
-
             pool_data = read_json(output_dir / "pool.json", default={})
             distiller = KnowledgeDistiller(kb=kb, router=router)
             distiller.distill(pool_data)

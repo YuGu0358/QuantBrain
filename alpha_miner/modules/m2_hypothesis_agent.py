@@ -10,6 +10,8 @@ from typing import Any
 from .common import PACKAGE_ROOT, read_json
 from .llm_cache import LLMCache
 from .m1_knowledge_base import KnowledgeBase
+from alpha_miner.modules.m_diagnoser import DiagnosisReport
+from alpha_miner.modules.m_repair_memory import RepairMemory
 
 
 @dataclass(frozen=True)
@@ -35,6 +37,7 @@ class HypothesisAgent:
         seed: int = 42,
         router=None,
         use_llm: bool = False,
+        repair_memory: RepairMemory | None = None,
     ):
         self.kb = kb
         self.cache = cache
@@ -46,6 +49,7 @@ class HypothesisAgent:
         self.random = random.Random(seed)
         self.router = router
         self.use_llm = use_llm
+        self.repair_memory = repair_memory
 
     def sample_underweight_category(self, existing_counts: dict[str, int] | None = None) -> str:
         counts = existing_counts or {}
@@ -54,8 +58,16 @@ class HypothesisAgent:
             return "QUALITY"
         return min(categories, key=lambda item: (counts.get(item, 0), item))
 
-    def generate_batch(self, objective: str, category: str, n: int = 10, use_llm: bool = False, repair_context: dict | None = None) -> list[Candidate]:
-        request_payload = self._request_payload(objective, category, n, repair_context=repair_context)
+    def generate_batch(
+        self,
+        objective: str,
+        category: str,
+        n: int = 10,
+        use_llm: bool = False,
+        repair_context: dict | None = None,
+        diagnosis: DiagnosisReport | None = None,
+    ) -> list[Candidate]:
+        request_payload = self._request_payload(objective, category, n, repair_context=repair_context, diagnosis=diagnosis)
         cached = self.cache.get(request_payload)
         if cached.hit and cached.payload:
             response = cached.payload["response"]
@@ -134,7 +146,14 @@ class HypothesisAgent:
             "subindustry": "GICS sub-industry — use ONLY inside group_rank(expr, subindustry) for finer peers",
         }
 
-    def _request_payload(self, objective: str, category: str, n: int, repair_context: dict | None = None) -> dict[str, Any]:
+    def _request_payload(
+        self,
+        objective: str,
+        category: str,
+        n: int,
+        repair_context: dict | None = None,
+        diagnosis: DiagnosisReport | None = None,
+    ) -> dict[str, Any]:
         context = self.kb.rag_context(category)
         # Templates for the target category shown as positive examples
         positive_templates = [
@@ -147,15 +166,30 @@ class HypothesisAgent:
             parent_expr = repair_context.get("expression", "")
             failed_checks = repair_context.get("failedChecks") or []
             gate_reasons = repair_context.get("gate", {}).get("reasons") or []
-            requirement = (
-                f"REPAIR MODE: Do NOT generate generic alphas. You must produce {n} targeted variants of "
-                f"the parent expression below that fix the specific failures listed. "
-                f"Each variant must preserve the core economic thesis but structurally address the failures. "
-                f"Parent expression: {parent_expr}. "
-                f"Failed checks: {', '.join(failed_checks)}. "
-                f"Gate reasons: {'; '.join(gate_reasons[:3])}. "
-                + _repair_instructions(failed_checks)
-            )
+            if diagnosis is not None:
+                repair_priorities = diagnosis.repair_priorities[:2]
+                requirement = (
+                    f"REPAIR MODE: Do NOT generate generic alphas. You must produce {n} targeted variants of "
+                    "the parent expression below using this structured diagnosis. "
+                    f"Primary symptom: {diagnosis.primary_symptom}. "
+                    f"Repair priorities: {json.dumps(repair_priorities, ensure_ascii=False)}. "
+                    f"Do not change: {', '.join(diagnosis.do_not_change) if diagnosis.do_not_change else 'none'}. "
+                    "Each variant must preserve the core economic thesis but structurally address the diagnosed failures. "
+                    f"Parent expression: {parent_expr}. "
+                    f"Failed checks: {', '.join(failed_checks)}. "
+                    f"Gate reasons: {'; '.join(gate_reasons[:3])}. "
+                    + _repair_instructions(failed_checks)
+                )
+            else:
+                requirement = (
+                    f"REPAIR MODE: Do NOT generate generic alphas. You must produce {n} targeted variants of "
+                    f"the parent expression below that fix the specific failures listed. "
+                    f"Each variant must preserve the core economic thesis but structurally address the failures. "
+                    f"Parent expression: {parent_expr}. "
+                    f"Failed checks: {', '.join(failed_checks)}. "
+                    f"Gate reasons: {'; '.join(gate_reasons[:3])}. "
+                    + _repair_instructions(failed_checks)
+                )
             user_dict: dict[str, Any] = {
                 "mode": "repair",
                 "parent_expression": parent_expr,
@@ -163,6 +197,21 @@ class HypothesisAgent:
                 "gate_reasons": gate_reasons,
                 "requirement": requirement,
             }
+            if diagnosis is not None:
+                symptoms = [diagnosis.primary_symptom, *diagnosis.secondary_symptoms]
+                raw_forbidden = _string_list(diagnosis.raw.get("forbidden_directions", [])) if isinstance(diagnosis.raw, dict) else []
+                memory_forbidden = self.repair_memory.get_forbidden_for_symptoms(symptoms) if self.repair_memory else []
+                positive_examples = self.repair_memory.get_positive_for_symptoms([diagnosis.primary_symptom]) if self.repair_memory else []
+                forbidden_directions = _dedupe_strings([*raw_forbidden, *memory_forbidden])
+                user_dict["diagnosis"] = {
+                    "primary_symptom": diagnosis.primary_symptom,
+                    "repair_priorities": repair_priorities,
+                    "do_not_change": diagnosis.do_not_change,
+                }
+                if forbidden_directions:
+                    user_dict["forbidden_directions"] = forbidden_directions
+                if positive_examples:
+                    user_dict["positive_memory_examples"] = positive_examples
         else:
             requirement = (
                 f"Generate {n} diverse alphas for the {category} category. "
@@ -481,3 +530,13 @@ def _repair_instructions(failed_checks: list[str]) -> str:
             "add winsorize() to cap extreme values; combine 2-3 signals additively."
         )
     return " ".join(parts)
+
+
+def _string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value]
+
+
+def _dedupe_strings(values: list[str]) -> list[str]:
+    return list(dict.fromkeys(value for value in values if value))
