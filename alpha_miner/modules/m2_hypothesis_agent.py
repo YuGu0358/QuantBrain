@@ -269,7 +269,7 @@ class HypothesisAgent:
 
     @staticmethod
     def _is_reasoning_model(model_id: str) -> bool:
-        return model_id.startswith(("o1", "o3", "o4"))
+        return model_id.startswith(("o1", "o3", "o4", "gpt-5"))
 
     def _call_provider(self, provider, request_payload: dict[str, Any]) -> tuple[str, int, int, float]:
         t0 = time.time()
