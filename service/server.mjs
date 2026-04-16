@@ -654,7 +654,8 @@ async function buildAlphaLibrary() {
       });
     }
   }
-  entries.sort((a, b) => (b.sharpe ?? -Infinity) - (a.sharpe ?? -Infinity));
+  entries.forEach(e => { e.source = e.runId?.startsWith("repair-") ? "repair" : "mining"; });
+  entries.sort((a, b) => (b.runId > a.runId ? 1 : b.runId < a.runId ? -1 : 0));
   return { total: entries.length, entries };
 }
 
@@ -3227,9 +3228,13 @@ body{display:flex}
       var sharpeColor = e.sharpe !== null ? (e.sharpe >= 1 ? 'c-green' : e.sharpe >= 0.5 ? 'c-amber' : 'c-red') : '';
       var hyp = e.hypothesis || '（无假设记录）';
       var degradedTag = e.degraded ? ' <span style="font-size:9px;color:var(--amber);margin-left:6px">降级模式</span>' : '';
+      var sourceTag = e.source === 'repair'
+        ? '<span style="font-size:9px;background:rgba(234,88,12,0.12);color:#ea580c;border:1px solid rgba(234,88,12,0.3);border-radius:4px;padding:1px 6px;margin-left:6px">修复</span>'
+        : '<span style="font-size:9px;background:rgba(37,99,235,0.1);color:#2563eb;border:1px solid rgba(37,99,235,0.25);border-radius:4px;padding:1px 6px;margin-left:6px">挖矿</span>';
       return '<div class="lib-card">' +
         '<div class="lib-card-header">' +
           '<span class="lib-badge ' + badge + '">' + (e.category || 'UNKNOWN') + '</span>' +
+          sourceTag +
           '<span class="lib-origin">' + origin + '</span>' +
           degradedTag +
           '<span class="lib-alphaid">' + e.alphaId + '</span>' +
