@@ -14,6 +14,8 @@ from alpha_miner.modules.m_diagnoser import Diagnoser
 from alpha_miner.modules.m_distiller import Distiller
 from alpha_miner.modules.m_repair_memory import RepairMemory
 from alpha_miner.modules.m_retriever import Retriever
+from alpha_miner.modules.m_planner import Planner
+from alpha_miner.modules.m_scheduler import BanditScheduler
 
 from .modules.common import PACKAGE_ROOT, append_jsonl, read_json, set_seed, write_json
 from .modules.config_loader import load_config, load_taxonomy
@@ -112,6 +114,9 @@ def main() -> None:
         repair_memory = RepairMemory(repair_memory_path)
         agent.repair_memory = repair_memory
         agent.retriever = Retriever(memory=repair_memory, router=router)
+        scheduler = BanditScheduler(output_dir.parent / "repair_scheduler.db")
+        agent.planner = Planner(router=router)
+        agent.scheduler = scheduler
 
     diagnosis = None
     if repair_ctx is not None and router is not None:
@@ -269,6 +274,26 @@ def main() -> None:
             accepted_expression=accepted_expr,
         )
         append_jsonl(progress_path, {"stage": "distilled", "accepted": accepted_expr is not None})
+        # Bandit scheduler: record action outcomes
+        metrics_orig = repair_ctx.get("metrics", {})
+        s_old = float(metrics_orig.get("isSharpe") or metrics_orig.get("sharpe") or 0)
+        f_old = float(metrics_orig.get("isFitness") or metrics_orig.get("fitness") or 0)
+        t_old = float(metrics_orig.get("turnover") or 0)
+        j_old = s_old * f_old - 0.5 * max(0.0, t_old - 0.4)
+        sched_outcomes = []
+        for r in evaluated_records:
+            bt = r.get("backtest", {})
+            action_type = next(
+                (ref for ref in (r.get("candidate", {}).get("origin_refs") or [])
+                 if ref in {"param_tune", "struct_mutation", "template_retrieval", "llm_mutation"}),
+                "llm_mutation",
+            )
+            j_new = (float(bt.get("sharpe") or 0) * float(bt.get("fitness") or 0)
+                     - 0.5 * max(0.0, float(bt.get("turnover") or 0) - 0.4))
+            accepted_r = r.get("dsr") is not None and r.get("orthogonality", {}).get("passed", False)
+            sched_outcomes.append({"action_type": action_type, "accepted": accepted_r, "j_old": j_old, "j_new": j_new})
+        scheduler.record_batch_outcomes(sched_outcomes)
+        append_jsonl(progress_path, {"stage": "scheduler_updated", "weights": scheduler.get_weights()})
 
     portfolio = optimizer.optimize(portfolio_pool)
     write_json(output_dir / "portfolio.json", asdict(portfolio))

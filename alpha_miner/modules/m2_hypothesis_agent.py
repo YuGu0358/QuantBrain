@@ -13,6 +13,8 @@ from .m1_knowledge_base import KnowledgeBase
 from alpha_miner.modules.m_diagnoser import DiagnosisReport
 from alpha_miner.modules.m_repair_memory import RepairMemory
 from alpha_miner.modules.m_retriever import Retriever
+from alpha_miner.modules.m_planner import Planner, RepairPlan
+from alpha_miner.modules.m_scheduler import BanditScheduler
 
 
 @dataclass(frozen=True)
@@ -52,6 +54,8 @@ class HypothesisAgent:
         self.use_llm = use_llm
         self.repair_memory = repair_memory
         self.retriever: Retriever | None = None
+        self.planner: Planner | None = None
+        self.scheduler: BanditScheduler | None = None
 
     def sample_underweight_category(self, existing_counts: dict[str, int] | None = None) -> str:
         counts = existing_counts or {}
@@ -226,6 +230,25 @@ class HypothesisAgent:
                         user_dict["recommended_directions"] = recommended_directions
                     if retrieval.get("retrieval_summary"):
                         user_dict["retrieval_summary"] = str(retrieval["retrieval_summary"])
+                    # Planner: decide candidate mix and update requirement
+                    if self.planner is not None:
+                        sched_weights = self.scheduler.get_weights() if self.scheduler else None
+                        plan = self.planner.plan(diagnosis, retrieval, total_budget=n, scheduler_weights=sched_weights)
+                        mix = plan.candidate_mix
+                        requirement = (
+                            f"Generate exactly {n} repair candidates with this mix: "
+                            f"{mix.get('param_tune',0)} param_tune (only adjust window/lag/threshold params), "
+                            f"{mix.get('struct_mutation',0)} struct_mutation (replace subtrees/operators), "
+                            f"{mix.get('template_retrieval',0)} template_retrieval (from positive memory), "
+                            f"{mix.get('llm_mutation',0)} llm_mutation (creative LLM rewrite). "
+                            "For each candidate add the action_type string to origin_refs list."
+                        )
+                        user_dict["requirement"] = requirement
+                        user_dict["repair_plan"] = {
+                            "candidate_mix": mix,
+                            "prioritized_actions": plan.prioritized_actions,
+                            "hard_constraints": plan.hard_constraints,
+                        }
                 else:
                     raw_forbidden = _string_list(diagnosis.raw.get("forbidden_directions", [])) if isinstance(diagnosis.raw, dict) else []
                     memory_forbidden = self.repair_memory.get_forbidden_for_symptoms(symptoms) if self.repair_memory else []
