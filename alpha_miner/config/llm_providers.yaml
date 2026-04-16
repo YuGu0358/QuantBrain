@@ -2,7 +2,7 @@ providers:
   # --- GENERATION ---
   gpt45_generate:
     role: generate
-    model_id: gpt-4.5-preview
+    model_id: gpt-5.4-2026-03-05
     api_base: null
     api_key_env: OPENAI_API_KEY
     client_type: openai_compat
@@ -13,7 +13,7 @@ providers:
   # --- REPAIR ---
   gpt45_repair:
     role: repair
-    model_id: gpt-4.5-preview
+    model_id: gpt-5.4-2026-03-05
     api_base: null
     api_key_env: OPENAI_API_KEY
     client_type: openai_compat
