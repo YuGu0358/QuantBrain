@@ -360,6 +360,7 @@ def test_main_repair_pipeline_passes_diagnosis_and_distills_memory(tmp_path: Pat
 
     def fake_generate_batch(self, objective, category, n=10, use_llm=False, repair_context=None, diagnosis=None):
         seen["repair_memory_attached"] = self.repair_memory is not None
+        seen["retriever_attached"] = self.retriever is not None
         seen["diagnosis"] = diagnosis
         return []
 
@@ -389,6 +390,7 @@ def test_main_repair_pipeline_passes_diagnosis_and_distills_memory(tmp_path: Pat
     main_module.main()
 
     assert seen["repair_memory_attached"] is True
+    assert seen["retriever_attached"] is True
     assert seen["diagnosis"].primary_symptom == "high_turnover"
     assert "repair" in router.picked_roles
     assert "distill" in router.picked_roles

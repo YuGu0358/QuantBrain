@@ -12,6 +12,7 @@ from .llm_cache import LLMCache
 from .m1_knowledge_base import KnowledgeBase
 from alpha_miner.modules.m_diagnoser import DiagnosisReport
 from alpha_miner.modules.m_repair_memory import RepairMemory
+from alpha_miner.modules.m_retriever import Retriever
 
 
 @dataclass(frozen=True)
@@ -50,6 +51,7 @@ class HypothesisAgent:
         self.router = router
         self.use_llm = use_llm
         self.repair_memory = repair_memory
+        self.retriever: Retriever | None = None
 
     def sample_underweight_category(self, existing_counts: dict[str, int] | None = None) -> str:
         counts = existing_counts or {}
@@ -199,19 +201,40 @@ class HypothesisAgent:
             }
             if diagnosis is not None:
                 symptoms = [diagnosis.primary_symptom, *diagnosis.secondary_symptoms]
-                raw_forbidden = _string_list(diagnosis.raw.get("forbidden_directions", [])) if isinstance(diagnosis.raw, dict) else []
-                memory_forbidden = self.repair_memory.get_forbidden_for_symptoms(symptoms) if self.repair_memory else []
-                positive_examples = self.repair_memory.get_positive_for_symptoms([diagnosis.primary_symptom]) if self.repair_memory else []
-                forbidden_directions = _dedupe_strings([*raw_forbidden, *memory_forbidden])
                 user_dict["diagnosis"] = {
                     "primary_symptom": diagnosis.primary_symptom,
                     "repair_priorities": repair_priorities,
                     "do_not_change": diagnosis.do_not_change,
                 }
-                if forbidden_directions:
-                    user_dict["forbidden_directions"] = forbidden_directions
-                if positive_examples:
-                    user_dict["positive_memory_examples"] = positive_examples
+                if self.retriever is not None:
+                    retrieval = self.retriever.retrieve(
+                        diagnosis,
+                        parent_expr,
+                        family_tag=repair_context.get("_category"),
+                    )
+                    forbidden_directions = _dedupe_strings(_string_list(retrieval.get("forbidden_directions", [])))
+                    recommended_directions = _dedupe_strings(_string_list(retrieval.get("recommended_directions", [])))
+                    if retrieval.get("family_saturated"):
+                        requirement = (
+                            requirement
+                            + " IMPORTANT: This alpha family is saturated — generate candidates from a DIFFERENT signal category."
+                        )
+                        user_dict["requirement"] = requirement
+                    if forbidden_directions:
+                        user_dict["forbidden_directions"] = forbidden_directions
+                    if recommended_directions:
+                        user_dict["recommended_directions"] = recommended_directions
+                    if retrieval.get("retrieval_summary"):
+                        user_dict["retrieval_summary"] = str(retrieval["retrieval_summary"])
+                else:
+                    raw_forbidden = _string_list(diagnosis.raw.get("forbidden_directions", [])) if isinstance(diagnosis.raw, dict) else []
+                    memory_forbidden = self.repair_memory.get_forbidden_for_symptoms(symptoms) if self.repair_memory else []
+                    positive_examples = self.repair_memory.get_positive_for_symptoms([diagnosis.primary_symptom]) if self.repair_memory else []
+                    forbidden_directions = _dedupe_strings([*raw_forbidden, *memory_forbidden])
+                    if forbidden_directions:
+                        user_dict["forbidden_directions"] = forbidden_directions
+                    if positive_examples:
+                        user_dict["positive_memory_examples"] = positive_examples
         else:
             requirement = (
                 f"Generate {n} diverse alphas for the {category} category. "

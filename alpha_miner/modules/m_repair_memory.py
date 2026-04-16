@@ -60,6 +60,53 @@ class RepairMemory:
             for record in matching_records
         ]
 
+    def retrieve(
+        self,
+        symptom_tags: list[str],
+        expression: str,
+        family_tag: str | None = None,
+        topk: int = 5,
+    ) -> dict:
+        records = self.get_recent(limit=10000)
+        scored_records = [
+            {
+                **record,
+                "symptom_tags": _string_list(record.get("symptom_tags", [])),
+                "score": _retrieval_score(record, symptom_tags, family_tag),
+            }
+            for record in records
+        ]
+        scored_records.sort(key=lambda record: record["score"], reverse=True)
+
+        positive = [
+            record
+            for record in scored_records
+            if record.get("accept_decision") == "accepted"
+        ][:topk]
+        negative = [
+            record
+            for record in scored_records
+            if record.get("accept_decision") == "rejected"
+        ][:topk]
+
+        return {
+            "positive": positive,
+            "negative": negative,
+            "forbidden_directions": _flatten_unique(negative, "forbidden_directions"),
+            "recommended_directions": _flatten_unique(positive, "recommended_directions"),
+        }
+
+    def family_saturation(self, family_tag: str, threshold: int = 5) -> bool:
+        if not family_tag:
+            return False
+        accepted_count = 0
+        for record in self.get_recent(limit=10000):
+            if record.get("accept_decision") == "accepted" and record.get("family_tag") == family_tag:
+                accepted_count += 1
+                if accepted_count >= threshold:
+                    return True
+        return False
+
     def get_recent(self, limit: int = 20) -> list[dict]:
         with self._connect() as conn:
             rows = conn.execute(
@@ -166,6 +213,57 @@ def _loads_json(value: Any, default: Any) -> Any:
         return json.loads(value)
     except (TypeError, json.JSONDecodeError):
         return default
+
+
+def _retrieval_score(record: dict[str, Any], query_tags: list[str], family_tag: str | None) -> float:
+    overlap_score = _symptom_overlap_score(
+        _string_list(record.get("symptom_tags", [])),
+        _string_list(query_tags),
+    )
+    family_bonus = 0.3 if family_tag and record.get("family_tag") == family_tag else 0.0
+    age_penalty = min(_days_since(record.get("timestamp")) * 0.01, 0.3)
+    return overlap_score + family_bonus - age_penalty
+
+
+def _symptom_overlap_score(record_tags: list[str], query_tags: list[str]) -> float:
+    if not record_tags or not query_tags:
+        return 0.0
+    denominator = max(len(set(record_tags)), len(set(query_tags)))
+    if denominator == 0:
+        return 0.0
+    return len(set(record_tags).intersection(query_tags)) / denominator
+
+
+def _days_since(timestamp: Any) -> float:
+    if not timestamp:
+        return 0.0
+    try:
+        parsed = datetime.fromisoformat(str(timestamp).replace("Z", "+00:00"))
+    except ValueError:
+        return 0.0
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    elapsed = datetime.now(timezone.utc) - parsed.astimezone(timezone.utc)
+    return max(elapsed.total_seconds() / 86400, 0.0)
+
+
+def _string_list(value: Any) -> list[str]:
+    if isinstance(value, str):
+        decoded = _loads_json(value, None)
+        if isinstance(decoded, list):
+            value = decoded
+        else:
+            return [value] if value else []
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value if item not in (None, "")]
+
+
+def _flatten_unique(records: list[dict[str, Any]], field: str) -> list[str]:
+    values: list[str] = []
+    for record in records:
+        values.extend(_string_list(record.get(field, [])))
+    return list(dict.fromkeys(value for value in values if value))
 
 
 __all__ = ["RepairMemory"]

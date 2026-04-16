@@ -13,6 +13,7 @@ from alpha_miner.modules.m9_knowledge_distiller import KnowledgeDistiller
 from alpha_miner.modules.m_diagnoser import Diagnoser
 from alpha_miner.modules.m_distiller import Distiller
 from alpha_miner.modules.m_repair_memory import RepairMemory
+from alpha_miner.modules.m_retriever import Retriever
 
 from .modules.common import PACKAGE_ROOT, append_jsonl, read_json, set_seed, write_json
 from .modules.config_loader import load_config, load_taxonomy
@@ -110,6 +111,7 @@ def main() -> None:
         repair_memory_path = output_dir.parent / "repair_memory.db"
         repair_memory = RepairMemory(repair_memory_path)
         agent.repair_memory = repair_memory
+        agent.retriever = Retriever(memory=repair_memory, router=router)
 
     diagnosis = None
     if repair_ctx is not None and router is not None:
