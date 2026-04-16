@@ -43,7 +43,7 @@ def main() -> None:
     cache = LLMCache(output_dir / "llm_cache")
     taxonomy = load_taxonomy()
     router = None
-    if os.environ.get("LLM_ROUTER_ENABLED", "false").lower() == "true":
+    if os.environ.get("LLM_ROUTER_ENABLED", "true").lower() != "false":
         router = LLMRouter.from_yaml()
         router._state_path = output_dir / "llm_router_state.json"
         # load existing state if available

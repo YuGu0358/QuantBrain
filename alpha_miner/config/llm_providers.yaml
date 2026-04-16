@@ -1,13 +1,14 @@
 providers:
-  deepseek_v3:
+  # --- GENERATION ---
+  gpt4o_generate:
     role: generate
-    model_id: deepseek-chat
-    api_base: https://api.deepseek.com/v1
-    api_key_env: DEEPSEEK_API_KEY
+    model_id: gpt-4o
+    api_base: null
+    api_key_env: OPENAI_API_KEY
     client_type: openai_compat
-    cost_per_1k_input: 0.00027
-    cost_per_1k_output: 0.00110
-    weight_initial: 0.5
+    cost_per_1k_input: 0.0025
+    cost_per_1k_output: 0.01000
+    weight_initial: 0.6
 
   gemini_flash:
     role: generate
@@ -17,28 +18,20 @@ providers:
     client_type: openai_compat
     cost_per_1k_input: 0.000075
     cost_per_1k_output: 0.00030
-    weight_initial: 0.5
+    weight_initial: 0.4
 
-  claude_haiku:
+  # --- REPAIR (use best reasoning model) ---
+  o4_mini_repair:
     role: repair
-    model_id: claude-haiku-4-5-20251001
-    api_base: null
-    api_key_env: ANTHROPIC_API_KEY
-    client_type: anthropic
-    cost_per_1k_input: 0.00025
-    cost_per_1k_output: 0.00125
-    weight_initial: 0.75
-
-  gpt4o_mini_repair:
-    role: repair
-    model_id: gpt-4o-mini
+    model_id: o4-mini
     api_base: null
     api_key_env: OPENAI_API_KEY
     client_type: openai_compat
-    cost_per_1k_input: 0.00015
-    cost_per_1k_output: 0.00060
-    weight_initial: 0.25
+    cost_per_1k_input: 0.00110
+    cost_per_1k_output: 0.00440
+    weight_initial: 1.0
 
+  # --- JUDGE ---
   gpt4o_mini_judge:
     role: judge
     model_id: gpt-4o-mini
@@ -49,6 +42,7 @@ providers:
     cost_per_1k_output: 0.00060
     weight_initial: 1.0
 
+  # --- DISTILL ---
   gpt4o_mini_distill:
     role: distill
     model_id: gpt-4o-mini
@@ -59,6 +53,7 @@ providers:
     cost_per_1k_output: 0.00060
     weight_initial: 1.0
 
+  # --- IDEA ---
   claude_sonnet_idea:
     role: idea
     model_id: claude-sonnet-4-6

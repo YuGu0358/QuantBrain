@@ -267,18 +267,26 @@ class HypothesisAgent:
         except Exception:
             return candidates[:n]
 
+    @staticmethod
+    def _is_reasoning_model(model_id: str) -> bool:
+        return model_id.startswith(("o1", "o3", "o4"))
+
     def _call_provider(self, provider, request_payload: dict[str, Any]) -> tuple[str, int, int, float]:
         t0 = time.time()
         if provider.client_type == "openai_compat":
             from openai import OpenAI
 
             client = OpenAI(api_key=os.environ.get(provider.api_key_env, ""), base_url=provider.api_base or None)
-            resp = client.chat.completions.create(
-                model=provider.model_id,
-                messages=request_payload["messages"],
-                temperature=request_payload.get("temperature", 0.4),
-                max_tokens=request_payload.get("max_tokens", 800),
-            )
+            kwargs: dict[str, Any] = {
+                "model": provider.model_id,
+                "messages": request_payload["messages"],
+            }
+            if self._is_reasoning_model(provider.model_id):
+                kwargs["max_completion_tokens"] = request_payload.get("max_tokens", 2000)
+            else:
+                kwargs["temperature"] = request_payload.get("temperature", 0.4)
+                kwargs["max_tokens"] = request_payload.get("max_tokens", 800)
+            resp = client.chat.completions.create(**kwargs)
             raw = resp.choices[0].message.content or ""
             ti = resp.usage.prompt_tokens if resp.usage else 0
             to = resp.usage.completion_tokens if resp.usage else 0
