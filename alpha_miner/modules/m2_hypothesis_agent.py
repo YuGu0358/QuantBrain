@@ -282,6 +282,7 @@ class HypothesisAgent:
         user_content = json.dumps(user_dict, ensure_ascii=False)
         return {
             "model": self.model,
+            "_llm_role": "repair" if is_repair else "generate",
             "messages": [
                 {
                     "role": "system",
