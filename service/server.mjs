@@ -32,7 +32,7 @@ const OPENAI_PLANNER_MODEL = "gpt-5.4-2026-03-05";
 const OPTIMIZE_IDEA_SYSTEM_PROMPT =
   'You are a WorldQuant BRAIN alpha research specialist. Convert the user idea into a structured research direction. Return strict JSON: {"objective":string,"category":one of QUALITY/MOMENTUM/REVERSAL/LIQUIDITY/VOLATILITY/MICROSTRUCTURE/SENTIMENT,"hypothesis":string,"constraints":[string],"suggested_data_fields":[string]}';
 const LLM_PLANNER_SYSTEM_PROMPT =
-  'You are a WorldQuant BRAIN alpha mining strategist. Analyze the current alpha library state and recent results to decide optimal parameters for the next mining run. Return ONLY valid JSON with this schema: {"objective":"specific 2-3 sentence hypothesis to investigate — pick novel angles not yet explored","rounds":number 1-3,"batchSize":number 5-15,"simulationSettings":{"region":"USA","universe":"TOP3000 or TOP1000 or TOP500","delay":1 or 2,"decay":number 0-13,"neutralization":"INDUSTRY or SUBINDUSTRY or MARKET","truncation":number 0.01-0.1,"pasteurization":"ON","unitHandling":"VERIFY"},"reasoning":"1-2 sentences why these params"}';
+  'You are a WorldQuant BRAIN alpha mining strategist. Analyze the current alpha library state and recent results to decide optimal parameters for the next mining run. IMPORTANT: always keep the same region as currentSimulationSettings.region — do not change it. Return ONLY valid JSON with this schema: {"objective":"specific 2-3 sentence hypothesis to investigate — pick novel angles not yet explored","rounds":number 1-3,"batchSize":number 5-15,"simulationSettings":{"region":"USA or EUROPE or ASIA — must match currentSimulationSettings.region","universe":"TOP3000 or TOP1000 or TOP500","delay":1 or 2,"decay":number 0-13,"neutralization":"INDUSTRY or SUBINDUSTRY or MARKET","truncation":number 0.01-0.1,"pasteurization":"ON","unitHandling":"VERIFY"},"reasoning":"1-2 sentences why these params"}';
 const OPTIMIZE_IDEA_CATEGORIES = new Set([
   "QUALITY",
   "MOMENTUM",
@@ -290,7 +290,7 @@ const server = createServer(async (req, res) => {
         const merged = { ...schedulerState.simulationSettings };
         if (["USA","EUROPE","ASIA"].includes(s.region)) merged.region = s.region;
         if (["TOP500","TOP1000","TOP2000","TOP3000"].includes(s.universe)) merged.universe = s.universe;
-        if ([0, 1].includes(Number(s.delay))) merged.delay = Number(s.delay);
+        if ([1, 2].includes(Number(s.delay))) merged.delay = Number(s.delay);
         if (Number.isFinite(Number(s.decay)) && Number(s.decay) >= 0 && Number(s.decay) <= 13) merged.decay = Number(s.decay);
         if (["NONE","SUBINDUSTRY","INDUSTRY","SECTOR","MARKET"].includes(s.neutralization)) merged.neutralization = s.neutralization;
         if (Number.isFinite(Number(s.truncation)) && Number(s.truncation) >= 0.01 && Number(s.truncation) <= 0.1) merged.truncation = Number(s.truncation);
@@ -573,7 +573,7 @@ function normalizePlannerPlan(parsed) {
     unitHandling: String(s.unitHandling ?? "").toUpperCase(),
   };
 
-  if (simulationSettings.region !== "USA") {
+  if (!["USA", "EUROPE", "ASIA"].includes(simulationSettings.region)) {
     throw new Error(`Planner response has invalid region: ${s.region}`);
   }
   if (!["TOP3000", "TOP1000", "TOP500"].includes(simulationSettings.universe)) {
@@ -628,6 +628,7 @@ async function planNextRunWithLLM() {
     }
 
     const context = {
+      currentSimulationSettings: schedulerState.simulationSettings,
       repairHistory: (autoLoopState.repairHistory ?? []).slice(-20),
       alphaLibrary: {
         total: alphaLibrary.total,
