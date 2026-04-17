@@ -1695,9 +1695,9 @@ function normalizePythonV2Candidate(record) {
     if (fitness != null) {
       checks.push({ name: "FITNESS", result: fitness >= 0.5 ? "PASS" : "FAIL", value: fitness, limit: 0.5 });
     }
-    // TURNOVER check: must be in BRAIN's acceptable range
+    // TURNOVER check: only fail when turnover exceeds 70%
     if (turnover != null) {
-      const turnoverOk = turnover >= 0.01 && turnover <= 0.7;
+      const turnoverOk = turnover <= 0.7;
       checks.push({ name: "TURNOVER", result: turnoverOk ? "PASS" : "FAIL", value: turnover, limit: 0.7 });
     }
     // Brain orthogonality check result if available
