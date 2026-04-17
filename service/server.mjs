@@ -1740,9 +1740,9 @@ function chooseRepairCandidates(candidates, maxItems = 3) {
       if (!candidate.alphaId) return false;
       const gate = evaluateCandidateGate(candidate);
       if (gate.ok) return false;
-      // Only repair when exactly one BRAIN check failed — more failures need regeneration
+      // Repair when 1-2 BRAIN checks failed; 3+ failures indicate fundamentally broken alpha
       const failed = failedCheckNames(gate);
-      return failed.length === 1;
+      return failed.length >= 1 && failed.length <= 2;
     })
     .sort((left, right) => repairPriority(right) - repairPriority(left))
     .slice(0, maxItems);
