@@ -264,6 +264,30 @@ def main() -> None:
             evaluated_records.append(record)
             append_jsonl(progress_path, {"stage": "evaluated", "candidate_id": candidate.id, "status": result.status})
 
+    if repair_ctx is not None and repair_memory is not None:
+        tried = [
+            {
+                "expression": r["candidate"]["expression"],
+                "sharpe": r.get("backtest", {}).get("sharpe"),
+                "fitness": r.get("backtest", {}).get("fitness"),
+                "turnover": r.get("backtest", {}).get("turnover"),
+                "accepted": r.get("dsr") is not None and r.get("orthogonality", {}).get("passed", False),
+            }
+            for r in evaluated_records
+        ]
+        accepted_expr = next((item["expression"] for item in tried if item["accepted"]), None)
+        # Feed repair outcomes back into LangChain RepairChain memory (closes the FAISS learning loop)
+        if agent.repair_chain is not None:
+            _rc_diag = diagnosis.raw if diagnosis is not None else {}
+            for r in evaluated_records:
+                _cand = r.get("candidate", {})
+                agent.repair_chain.record_outcome(
+                    expression=repair_ctx.get("expression", ""),
+                    diagnosis=_rc_diag if isinstance(_rc_diag, dict) else {},
+                    candidates=[_cand] if _cand else [],
+                    accepted=r.get("dsr") is not None and r.get("orthogonality", {}).get("passed", False),
+                )
+
     if repair_ctx is not None and router is not None and diagnosis is not None and repair_memory is not None:
         distiller = Distiller(router, repair_memory)
         tried = [
