@@ -212,20 +212,34 @@ def build_tools(memory: RepairMemory, embeddings: Any, validator: Any) -> list:
 # ---------------------------------------------------------------------------
 
 class RepairChain:
-    """LangChain Tool-calling Agent for alpha repair with FAISS semantic memory."""
+    """LangChain Tool-calling Agent for alpha repair.
+
+    Supports both Claude (claude-*) and OpenAI (gpt-*) models.
+    Pass the appropriate API key via ``api_key``; embeddings always use
+    OpenAI text-embedding-3-small (pass ``openai_api_key`` separately when
+    the primary LLM is Claude).
+    """
 
     def __init__(
         self,
         memory: RepairMemory,
-        openai_api_key: str,
-        model_id: str = "gpt-4o",
+        api_key: str = "",
+        model_id: str = "claude-opus-4-6",
         temperature: float = 0.7,
+        openai_api_key: str = "",
+        # Legacy positional alias kept for backward compat
+        **kwargs: Any,
     ):
         self.memory = memory
         self._model_id = model_id
-        self._api_key = openai_api_key
+        self._api_key = api_key or kwargs.get("openai_api_key", "")
+        self._openai_key = openai_api_key or self._api_key
         self._temperature = temperature
         self._embeddings = None
+
+    @property
+    def _is_claude(self) -> bool:
+        return self._model_id.startswith("claude")
 
     def _ensure_llm(self, validator: Any = None) -> tuple:
         """Initialize LLM, tools, and embeddings. Returns (llm_with_tools, tools, tool_map)."""
@@ -234,19 +248,31 @@ class RepairChain:
         project = os.environ.get("LANGCHAIN_PROJECT", "(not set)")
         print(f"[repair_agent] initializing model={self._model_id} langsmith_tracing={tracing} project={project}", flush=True)
 
-        from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+        from langchain_openai import OpenAIEmbeddings
 
-        if self._embeddings is None:
-            self._embeddings = OpenAIEmbeddings(api_key=self._api_key, model="text-embedding-3-small")
+        if self._embeddings is None and self._openai_key:
+            self._embeddings = OpenAIEmbeddings(api_key=self._openai_key, model="text-embedding-3-small")
 
         tools = build_tools(self.memory, self._embeddings, validator)
         tool_map = {t.name: t for t in tools}
 
-        is_reasoning = self._model_id.startswith(("o1", "o3", "o4", "gpt-5"))
-        llm_kwargs: dict[str, Any] = {"api_key": self._api_key, "model": self._model_id}
-        if not is_reasoning:
-            llm_kwargs["temperature"] = self._temperature
-        llm = ChatOpenAI(**llm_kwargs)
+        if self._is_claude:
+            from langchain_anthropic import ChatAnthropic
+            llm_kwargs: dict[str, Any] = {
+                "api_key": self._api_key,
+                "model": self._model_id,
+            }
+            if not self._model_id.startswith(("claude-opus-4", "claude-sonnet-4")):
+                llm_kwargs["temperature"] = self._temperature
+            llm = ChatAnthropic(**llm_kwargs)
+        else:
+            from langchain_openai import ChatOpenAI
+            is_reasoning = self._model_id.startswith(("o1", "o3", "o4", "gpt-5"))
+            llm_kwargs = {"api_key": self._api_key, "model": self._model_id}
+            if not is_reasoning:
+                llm_kwargs["temperature"] = self._temperature
+            llm = ChatOpenAI(**llm_kwargs)
+
         llm_with_tools = llm.bind_tools(tools)
         return llm_with_tools, tools, tool_map
 

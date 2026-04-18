@@ -126,13 +126,16 @@ def main() -> None:
         repair_memory_path = output_dir.parent / "repair_memory.db"
         repair_memory = RepairMemory(repair_memory_path)
         agent.repair_memory = repair_memory
-        # LangChain repair chain (primary path)
+        # LangChain repair chain (primary path) — defaults to Claude opus-4-6
+        anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
         openai_key = os.environ.get("OPENAI_API_KEY", "")
-        repair_model = os.environ.get("OPENAI_REPAIR_MODEL", os.environ.get("OPENAI_IDEA_MODEL", "gpt-4o"))
+        repair_model = os.environ.get("REPAIR_MODEL", "claude-opus-4-6")
+        repair_api_key = anthropic_key if repair_model.startswith("claude") else openai_key
         agent.repair_chain = RepairChain(
             memory=repair_memory,
-            openai_api_key=openai_key,
+            api_key=repair_api_key,
             model_id=repair_model,
+            openai_api_key=openai_key,  # always passed for embeddings
         )
         # Legacy fallback (kept for compatibility)
         agent.retriever = Retriever(memory=repair_memory, router=router)

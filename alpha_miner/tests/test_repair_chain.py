@@ -19,7 +19,7 @@ def tmp_memory(tmp_path):
 
 @pytest.fixture
 def chain(tmp_memory):
-    return RepairChain(memory=tmp_memory, openai_api_key="test-key", model_id="gpt-4o")
+    return RepairChain(memory=tmp_memory, api_key="test-key", model_id="gpt-4o", openai_api_key="test-key")
 
 
 # ---------------------------------------------------------------------------

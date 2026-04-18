@@ -651,6 +651,7 @@ async function planNextRunWithLLM() {
 
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
+      signal: AbortSignal.timeout(20_000),
       headers: {
         Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
         "Content-Type": "application/json",
@@ -748,7 +749,7 @@ function scheduleNextRun(reason) {
   // everything else (scheduler-update, active-run-skip, etc.) → full interval
   let cooldown;
   if (reason === "run-finished") cooldown = 1;
-  else if (reason === "startup" || reason === "scheduler-error" || reason === "missing-next-run") cooldown = 2;
+  else if (reason === "startup" || reason === "scheduler-error" || reason === "missing-next-run" || reason === "active-run-skip") cooldown = 2;
   else cooldown = schedulerState.intervalMinutes;
   const next = new Date(Date.now() + cooldown * 60_000);
   schedulerState.nextRunAt = schedulerState.enabled ? next.toISOString() : null;
