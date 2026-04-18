@@ -19,7 +19,9 @@ from alpha_miner.modules.m_repair_memory import RepairMemory
 
 _SYSTEM_PROMPT = """You are a WorldQuant BRAIN alpha factor repair agent.
 
-Your goal: repair a failing alpha expression so it passes all quality checks.
+Your goal: produce THE SINGLE BEST repair for a failing alpha expression.
+Do not generate multiple options — think carefully and commit to the one repair
+you are most confident will pass all quality checks.
 
 BRAIN OPERATORS:
 ts_mean(x,d), ts_rank(x,d), ts_std_dev(x,d), ts_delta(x,d), ts_zscore(x,d),
@@ -28,23 +30,26 @@ group_rank(x, industry), group_rank(x, subindustry),
 divide(x,y), multiply(x,y), abs(x), log(x), power(x,n), sign(x), winsorize(x,p)
 
 REPAIR PRINCIPLES:
-- low_sharpe: longer lookback, add group_rank sector neutralization, blend complementary signals
-- low_fitness: wrap with rank() or zscore(), add ts_mean for cross-sectional stability
-- high_turnover: wrap with ts_decay_linear(x, 5-20) or extend window to 21+ days
+- low_sharpe: longer lookback (63→126d), add group_rank sector neutralization, blend complementary signal
+- low_fitness: FITNESS = PnL/TVR — primary cause is HIGH TURNOVER.
+  Wrap with ts_decay_linear(x, 15) to cut turnover in half; extend windows to ≥42d;
+  replace ts_delta(x,d<10) with ts_mean(x,21); use group_rank outer layer for coverage.
+- high_turnover: ts_decay_linear(x, 10-20) is the most effective fix; or extend all windows
 - high_corrlib: change primary data field or time horizon entirely
 
 WORKFLOW (follow this order):
 1. Call diagnose_alpha to understand the failure
 2. Call retrieve_repair_memory to learn from past repairs
 3. Call generate_repair_variants to create candidates
-4. Call validate_expression for each candidate
+4. Call validate_expression for the best candidate
 5. Return your final answer as JSON ONLY — no other text:
 {
   "diagnosis": {"primary_symptom": "<symptom>", "root_cause": "<cause>"},
   "candidates": [
     {"expression": "<valid BRAIN expr>", "hypothesis": "<economic logic>", "fix_applied": "<what changed>"}
   ]
-}"""
+}
+The "candidates" array must contain EXACTLY ONE entry — your single most confident repair."""
 
 
 # ---------------------------------------------------------------------------
@@ -173,14 +178,14 @@ def build_tools(memory: RepairMemory, embeddings: Any, validator: Any) -> list:
             return f"INVALID: {exc}"
 
     @tool
-    def generate_repair_variants(expression: str, diagnosis_json: str, memory_context: str, n: int = 3) -> str:
-        """Generate N repair variants of a failing expression.
+    def generate_repair_variants(expression: str, diagnosis_json: str, memory_context: str, n: int = 1) -> str:
+        """Generate the single best repair for a failing expression.
         Args:
             expression: The original failing BRAIN expression
             diagnosis_json: JSON string from diagnose_alpha tool
             memory_context: Context string from retrieve_repair_memory tool
-            n: Number of variants to generate (default 3)
-        Returns JSON array of candidates with expression, hypothesis, fix_applied.
+            n: Number of variants (always 1 — generate only the most confident repair)
+        Returns JSON array with exactly one candidate: expression, hypothesis, fix_applied.
         """
         # This tool returns a structured prompt for the LLM to fill in.
         # The agent calling this tool will see its result and produce candidates.
@@ -199,8 +204,8 @@ def build_tools(memory: RepairMemory, embeddings: Any, validator: Any) -> list:
             f"Strategy: {strategy}\n"
             f"Preserve: {', '.join(do_not_change) or 'nothing specific'}\n"
             f"Memory context:\n{memory_context}\n\n"
-            f"Generate {n} repair variants as JSON array:\n"
-            '[\n  {"expression": "...", "hypothesis": "...", "fix_applied": "..."},\n  ...\n]'
+            f"Generate EXACTLY 1 repair — your single most confident fix — as a JSON array with one item:\n"
+            '[\n  {"expression": "...", "hypothesis": "...", "fix_applied": "..."}\n]'
         )
         return hint
 

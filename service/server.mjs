@@ -59,7 +59,7 @@ const AUTO_REPAIR_ENABLED = process.env.AUTO_REPAIR_ENABLED !== "false";
 const AUTO_REPAIR_ENGINE = normalizeEngine(process.env.AUTO_REPAIR_ENGINE ?? "python-v2");
 const AUTO_REPAIR_MAX_ROUNDS = clampInt(process.env.AUTO_REPAIR_MAX_ROUNDS, 5, 1, 10);
 const AUTO_REPAIR_MAX_QUEUE = clampInt(process.env.AUTO_REPAIR_MAX_QUEUE, 5, 1, 20);
-const AUTO_REPAIR_BATCH_SIZE = clampInt(process.env.AUTO_REPAIR_BATCH_SIZE, 5, 1, 10);
+const AUTO_REPAIR_BATCH_SIZE = clampInt(process.env.AUTO_REPAIR_BATCH_SIZE, 1, 1, 10);
 const REPAIR_TARGET_SHARPE = parseFloat(process.env.REPAIR_TARGET_SHARPE ?? "1.25");
 const REPAIR_TARGET_FITNESS = parseFloat(process.env.REPAIR_TARGET_FITNESS ?? "1.0");
 const REPAIR_TARGET_TURNOVER = parseFloat(process.env.REPAIR_TARGET_TURNOVER ?? "0.70");

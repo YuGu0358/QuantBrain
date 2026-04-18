@@ -162,7 +162,7 @@ def test_generate_repair_variants_returns_hint(tmp_memory):
     })
     assert "rank(returns)" in result
     assert "low_sharpe" in result
-    assert "3" in result
+    assert "1" in result  # always generates exactly 1 candidate
 
 
 # ---------------------------------------------------------------------------
