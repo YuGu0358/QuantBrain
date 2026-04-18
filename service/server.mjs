@@ -1440,8 +1440,12 @@ async function handleRunFinished(runState) {
   const repairCandidatesPre = chooseRepairCandidates(candidates, 3);
   console.log(`[handleRunFinished] runId=${runState.runId} mode=${runState.mode} source=${runState.source} candidates=${candidates.length} repairEligible=${repairCandidatesPre.length} outputDir=${runState.outputDir}`);
   if (candidates.length > 0) {
-    const sample = candidates[0];
-    console.log(`[handleRunFinished] sample candidate: alphaId=${sample.alphaId} expression=${String(sample.expression||"").slice(0,60)} checks=${JSON.stringify((sample.checks||[]).map(c=>c.name+":"+c.result))}`);
+    // Log all candidates' check summaries to diagnose why repairEligible might be 0
+    for (const c of candidates.slice(0, 5)) {
+      const gate = evaluateCandidateGate(c);
+      const failed = failedCheckNames(gate);
+      console.log(`[handleRunFinished] cand alphaId=${c.alphaId?.slice(0,16)} checks=${JSON.stringify(failed)} gateOk=${gate.ok} degraded=${c._degraded}`);
+    }
   }
   const best = bestRepairCandidate(candidates);
   const bestMetrics = extractBestMetrics(best);
@@ -1449,6 +1453,7 @@ async function handleRunFinished(runState) {
 
   const submitted = await tryAutoSubmitCandidates(candidates, runState.runId, runState.ownerId);
   if (submitted) {
+    console.log(`[handleRunFinished] auto-submitted alphaId=${submitted.alphaId} — skipping repair queue`);
     if (runState.source === "repair") {
       pushRepairHistory({ alphaId: runState.parentAlphaId, expression: autoLoopState.activeRepair?.expression ?? null, failedChecks: autoLoopState.activeRepair?.failedChecks ?? [], repairDepth: runState.repairDepth ?? 0, outcome: "submitted", runId: runState.runId, bestMetrics });
       await clearActiveRepair(runState.runId);
@@ -1541,15 +1546,18 @@ async function enqueueRepairFromGate({ alpha, gate, source, sourceRunId, repairD
     return { queued: false, runId: null, reason: "auto repair disabled" };
   }
   const alphaId = alpha?.id ?? gate?.alphaId ?? null;
-  if (!alphaId) return { queued: false, runId: null, reason: "missing alpha id" };
+  if (!alphaId) { console.log(`[enqueueRepair] SKIP: missing alpha id`); return { queued: false, runId: null, reason: "missing alpha id" }; }
   if (repairDepth >= AUTO_REPAIR_MAX_ROUNDS) {
+    console.log(`[enqueueRepair] SKIP: budget exhausted alphaId=${alphaId} depth=${repairDepth}/${AUTO_REPAIR_MAX_ROUNDS}`);
     pushAutoLoopEvent({ type: "repair-budget-exhausted", alphaId, ownerId, repairDepth, source });
     await saveAutoLoopState();
     return { queued: false, runId: null, reason: "repair budget exhausted" };
   }
   if (autoLoopState.queue.some((item) => item.parentAlphaId === alphaId) || autoLoopState.activeRepair?.parentAlphaId === alphaId) {
+    console.log(`[enqueueRepair] SKIP: already queued alphaId=${alphaId}`);
     return { queued: false, runId: autoLoopState.activeRepair?.runId ?? null, reason: "repair already queued" };
   }
+  console.log(`[enqueueRepair] QUEUED alphaId=${alphaId} depth=${repairDepth} failedChecks=${JSON.stringify(failedCheckNames(gate))}`);
 
   const item = buildRepairQueueItem({ alpha, gate, source, sourceRunId, repairDepth, rootAlphaId, ownerId, _category: _category ?? alpha?._category ?? null });
   autoLoopState.queue.push(item);
