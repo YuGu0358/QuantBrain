@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import time
 from dataclasses import asdict
 from pathlib import Path
@@ -284,6 +285,14 @@ def main() -> None:
                     },
                 )
             evaluated_records.append(record)
+            _accepted = (
+                (record.get("dsr") is not None and record.get("orthogonality", {}).get("passed", False))
+                or record.get("degradedQualified", False)
+            )
+            try:
+                _kb_write_back(kb, category, candidate, result, _accepted)
+            except Exception as _kb_exc:
+                print(f"[kb] write-back failed: {_kb_exc}", flush=True)
             append_jsonl(progress_path, {"stage": "evaluated", "candidate_id": candidate.id, "status": result.status})
 
     if repair_ctx is not None and repair_memory is not None:
@@ -544,6 +553,50 @@ def phase0_mode(mode: str) -> str:
     if "- Decision: Case C" in text:
         return "regular_tier_degraded_no_daily_pnl"
     return "phase0_brain_probe_not_actionable"
+
+
+def _extract_operator_skeleton(expression: str) -> str:
+    import re
+
+    ops = list(dict.fromkeys(re.findall(r"[a-z_]+(?=\()", expression)))
+    return ",".join(ops)
+
+
+def _kb_write_back(kb, category, candidate, result, accepted: bool) -> None:
+    skeleton = _extract_operator_skeleton(candidate.expression)
+    kb.record_strategy_stat(category, "PASS" if accepted else "FAIL", skeleton)
+    for op in skeleton.split(","):
+        if op:
+            kb.record_operator_stat(op, category, accepted)
+    if accepted:
+        kb.upsert_example(
+            item_id=f"eval_{candidate.id}",
+            expression=candidate.expression,
+            category=category,
+            hypothesis=candidate.hypothesis,
+            is_negative_example=False,
+            metadata={"sharpe": result.sharpe, "fitness": result.fitness, "turnover": result.turnover},
+        )
+    elif result.sharpe is not None:
+        if result.fitness is not None and result.fitness < 0.5:
+            reason = "LOW_FITNESS"
+            suggested_fix = "Wrap volatile sub-expressions with ts_decay_linear(expr, 15) to reduce turnover below 15%"
+        elif result.sharpe < 0.4:
+            reason = "LOW_SHARPE"
+            suggested_fix = "Add group_rank neutralization and blend a complementary signal type"
+        else:
+            reason = "FAILED_GATE"
+            suggested_fix = "Check operator structure and try different parameter windows"
+        if reason in ("LOW_FITNESS", "LOW_SHARPE"):
+            kb.upsert_example(
+                item_id=f"fail_{candidate.id}",
+                expression=candidate.expression,
+                category=category,
+                hypothesis=candidate.hypothesis,
+                is_negative_example=True,
+                metadata={"sharpe": result.sharpe, "fitness": result.fitness, "turnover": result.turnover},
+            )
+        kb.record_failure_pattern(reason=reason, expression=candidate.expression, suggested_fix=suggested_fix)
 
 
 def parse_args() -> argparse.Namespace:

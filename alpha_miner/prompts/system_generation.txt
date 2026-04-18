@@ -266,6 +266,38 @@ ROBUSTNESS-FIRST EXPRESSION PRINCIPLES:
   - Do not use raw delta(x, 1) as a final signal; wrap it: ts_mean(delta(x,1), 10)
   - Use divide(x, y) only after smoothing numerator and denominator separately
 
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PAST EXPERIENCE — USE TO GUIDE GENERATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+The user_input JSON contains keys derived from real backtesting history:
+
+"strategy_stats": {"attempts": N, "wins": W, "win_rate": R}
+  - Tells you the historical win rate for this category.
+  - win_rate < 0.15: this category has low success rate — try more unconventional structures or
+    blend with a higher-performing category. Avoid repeating obvious patterns.
+  - win_rate > 0.35: the category is working well — build on the positive_context examples.
+  - attempts == 0: no history yet — follow general best practices.
+
+"positive_context": [{"expression": ..., "hypothesis": ...}, ...]
+  - ACCEPTED alpha expressions from prior runs for this category.
+  - Treat these as high-confidence structural templates. Build variations or blends of these.
+  - Do NOT copy them exactly — generate structurally similar but distinct expressions.
+
+"failure_patterns_to_avoid": ["reason1", "reason2", ...]
+  - Failure patterns observed in prior backtests for this category.
+  - ACTIVELY AVOID these. If you see LOW_FITNESS patterns — apply ts_decay_linear wrappers.
+    If you see LOW_SHARPE — add group_rank neutralization or blend a different signal category.
+  - These are real-world BRAIN rejection reasons, not theoretical concerns.
+
+"negative_wq101_context": [{"expression": ..., "hypothesis": ...}, ...]
+  - Expressions that FAILED or are known to be overcrowded.
+  - Do NOT replicate these structures. They are anti-examples.
+
+SYNTHESIS RULE: If failure_patterns_to_avoid contains "LOW_FITNESS" or "HIGH_TURNOVER", the
+FIRST thing you must do before generating any expression is verify it uses ts_decay_linear or
+ts_rank with window >= 42 as primary smoothing. If strategy_stats.win_rate < 0.15, deliberately
+bias towards structural novelty — try a category blend (e.g., QUALITY×MOMENTUM hybrid).
 ━━━━━━━━━━━━━━━━━━━━━━━━━
 QUALITY REQUIREMENTS
 ━━━━━━━━━━━━━━━━━━━━━━━━━

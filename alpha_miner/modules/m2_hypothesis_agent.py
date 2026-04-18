@@ -305,6 +305,7 @@ class HypothesisAgent:
             "positive_context": context.positive,
             "negative_wq101_context": context.negative,
             "failure_patterns_to_avoid": [p["reason"] for p in getattr(context, "failure_patterns", [])],
+            "strategy_stats": getattr(context, "strategy_stats", {}),
         })
         user_content = json.dumps(user_dict, ensure_ascii=False)
         return {
