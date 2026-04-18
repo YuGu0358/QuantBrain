@@ -31,6 +31,7 @@ class BacktestResult:
     raw_path: str
     simulation_id: str | None = None
     has_daily_pnl: bool = False
+    test_sharpe: float | None = None
 
 
 @dataclass
@@ -152,6 +153,9 @@ class BrainBacktester:
         sharpe = safe_float(metrics.get("sharpe")) or safe_float(poll_payload.get("sharpe") if isinstance(poll_payload, dict) else None)
         turnover = safe_float(metrics.get("turnover")) or safe_float(poll_payload.get("turnover") if isinstance(poll_payload, dict) else None)
         fitness = safe_float(metrics.get("fitness")) or safe_float(poll_payload.get("fitness") if isinstance(poll_payload, dict) else None)
+        # OOS (test period) Sharpe — BRAIN exposes alpha.test.sharpe separately from IS
+        alpha_test = (alpha_payload.get("test") or {}) if isinstance(alpha_payload, dict) else {}
+        test_sharpe = safe_float(alpha_test.get("sharpe"))
         append_jsonl(
             self.progress_path,
             {
@@ -177,6 +181,7 @@ class BrainBacktester:
             raw_path=str(snapshot_path),
             simulation_id=simulation_id,
             has_daily_pnl=bool(series_path),
+            test_sharpe=test_sharpe,
         )
 
     def get_alpha(self, alpha_id: str | None, cookie: str | None = None) -> dict[str, Any] | None:

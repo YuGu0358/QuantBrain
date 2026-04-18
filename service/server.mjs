@@ -1739,7 +1739,7 @@ function normalizePythonV2Candidate(record) {
     checks,
     metrics: {
       isSharpe: sharpe,
-      testSharpe: sharpe,
+      testSharpe: bt.test_sharpe ?? null,  // BRAIN alpha.test.sharpe (OOS), not a copy of IS sharpe
       fitness,
       turnover,
       netSharpe: bt.net_sharpe ?? null,

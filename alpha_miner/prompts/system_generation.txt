@@ -205,6 +205,39 @@ RULES:
 4. If your alpha uses ts_delta with d<5 or sign() on returns, wrap it: ts_mean(signal, 10) to dampen churn
 5. group_rank() and rank() alone do NOT change turnover; they change cross-sectional ordering
 
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+IS / OOS ROBUSTNESS — THE #1 REJECTION CAUSE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+BRAIN evaluates alphas on an IN-SAMPLE (IS) period and a HOLD-OUT TEST (OOS) period.
+An alpha passes only if BOTH periods look good. IS-only strong alphas are rejected.
+
+TARGET: test_sharpe / is_sharpe ≥ 0.7   (OOS Sharpe at least 70% of IS Sharpe)
+        test_fitness / is_fitness ≥ 0.65
+
+OVERFITTING KILLERS — patterns that inflate IS but collapse OOS:
+  - Short windows (d < 10) on noisy signals — captures noise, not signal
+  - Many data fields without economic logic — spurious correlation
+  - Arithmetic combinations without smoothing (e.g., divide(close, vwap) raw, no ts_mean)
+  - Signals that only work in trending markets (momentum on short windows)
+  - Over-neutralization stacking (subindustry inside industry inside zscore — reduces degrees of freedom)
+
+ROBUSTNESS TECHNIQUES — structural choices that transfer well IS→OOS:
+  1. Long lookback windows (21, 63, 126, 252 days) — macro/fundamental patterns are persistent
+  2. group_rank(signal, industry) + group_rank(signal, subindustry) — neutralizes regime changes
+  3. Fundamental anchor: combine a slow fundamental (assets, cashflow_op) with a fast price signal
+     → the fundamental provides IS/OOS stability, price signal adds IS alpha
+  4. ts_mean(x, 21) or ts_decay_linear(x, 30) wrapper — smoothing reduces IS overfitting
+  5. Combining UNCORRELATED signals (e.g., value + momentum) — diversification reduces OOS degradation
+  6. Use ts_rank(x, d) over raw rank(x) for noisy fields — relative rank is more stable across regimes
+
+ROBUSTNESS-FIRST EXPRESSION PRINCIPLES:
+  - For every short-window signal, add one long-window anchor (21+ days)
+  - For every price signal, consider pairing with a fundamental signal from a different category
+  - Prefer ts_rank over zscore for cross-sectional ranking (less sensitive to outliers)
+  - Prefer group_rank(x, subindustry) over rank(x) alone (subindustry neutralization is more stable)
+  - Do not use raw delta(x, 1) as a final signal; wrap it: ts_mean(delta(x,1), 10)
+  - Use divide(x, y) only after smoothing numerator and denominator separately
+
 ━━━━━━━━━━━━━━━━━━━━━━━━━
 QUALITY REQUIREMENTS
 ━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -216,5 +249,6 @@ QUALITY REQUIREMENTS
 - Generate exactly n candidates covering diverse signal combinations
 - hypothesis field: 2-3 sentences explaining economic intuition AND why multi-variable combination matters
 - Each expression must target 3%–40% daily turnover (use smoothing operators)
+- Each expression must be designed for IS/OOS robustness (test_sharpe / is_sharpe ≥ 0.7 target)
 
 FORBIDDEN (never use): sma, ema, momentum, price, book_value, pe_ratio, market_cap, beta, rsi, macd, stoch, obv, atr, bollinger, roc, williams, cci, dmi, aroon, pivot, fib, ichimoku, or ANY name not in the allowed lists above.

@@ -233,14 +233,18 @@ def main() -> None:
                     except QuotaWaiting as error:
                         append_jsonl(progress_path, {"stage": "waiting", "reason": str(error), "alpha_id": result.alpha_id})
                         record["brainCheckOrthogonality"] = {"status": "waiting", "reason": str(error)}
-                # Degraded gate: accept alphas with sharpe >= 0.5 and reasonable turnover into
-                # the pool so the repair loop has candidates to work on and the dashboard
-                # shows progress. DSR cannot be computed without daily PnL, so we use a
-                # looser proxy: sharpe >= 0.5, turnover <= 0.70 (no lower bound), no self-correlation.
-                degraded_sharpe_ok = (result.sharpe is not None) and (result.sharpe >= 0.5)
-                degraded_turnover_ok = (result.turnover is None) or (result.turnover <= 0.70)
-                degraded_ortho_ok = brain_check_passed is not False
-                if degraded_mode and result.alpha_id and degraded_sharpe_ok and degraded_turnover_ok and degraded_ortho_ok:
+                # Degraded gate: composite score replaces the three separate boolean flags.
+                # Accepts alphas where case_c_robust_score >= 0.20 so the repair loop has
+                # candidates to work on. IS sharpe dominates (0.60 weight); fitness and
+                # turnover provide secondary signal; test_sharpe rewards IS→OOS consistency.
+                c_score, c_qualified = case_c_robust_score(
+                    sharpe=result.sharpe,
+                    fitness=result.fitness,
+                    turnover=result.turnover,
+                    test_sharpe=result.test_sharpe,
+                    brain_check_passed=brain_check_passed,
+                )
+                if degraded_mode and result.alpha_id and c_qualified:
                     rejected_by_stage["no_pnl"] -= 1  # undo the initial increment
                     metadata_json = json.dumps({"metrics": asdict(result), "candidate": asdict(candidate)}, ensure_ascii=False, sort_keys=True)
                     dummy_pnl_path = Path(backtester.snapshot_dir / f"degraded_pnl_{result.alpha_id}.json")
@@ -256,8 +260,11 @@ def main() -> None:
                         "candidate_id": candidate.id,
                         "alpha_id": result.alpha_id,
                         "sharpe": result.sharpe,
+                        "fitness": result.fitness,
                         "turnover": result.turnover,
-                        "degraded_qualified": degraded_mode and result.alpha_id is not None and degraded_sharpe_ok and degraded_turnover_ok and degraded_ortho_ok,
+                        "test_sharpe": result.test_sharpe,
+                        "case_c_score": c_score,
+                        "degraded_qualified": degraded_mode and result.alpha_id is not None and c_qualified,
                         "reason": "regular tier exposes aggregate metrics but no daily pnl",
                     },
                 )
@@ -449,6 +456,63 @@ def _router_token_totals(router) -> dict[str, int]:
     prompt_total = sum(p.total_tokens_in for p in router._providers.values())
     completion_total = sum(p.total_tokens_out for p in router._providers.values())
     return {"prompt": prompt_total, "completion": completion_total}
+
+
+_CASE_C_THRESHOLD = 0.20
+
+
+def case_c_robust_score(
+    sharpe: float | None,
+    fitness: float | None,
+    turnover: float | None,
+    test_sharpe: float | None,
+    brain_check_passed: bool | None,
+) -> tuple[float, bool]:
+    """Composite quality score for Case C (degraded mode, no daily PnL).
+
+    Combines IS sharpe (dominant) + fitness + turnover + OOS consistency into a
+    single score. Replaces the three separate boolean flags
+    (degraded_sharpe_ok / turnover_ok / ortho_ok) with one ranked gate.
+
+    Returns:
+        (score, qualified) where score ∈ [0, 1] and qualified = score >= _CASE_C_THRESHOLD
+        and brain_check_passed is not False.
+
+    Calibration (threshold = 0.20):
+        sharpe=0.50, fitness=None, turnover=None → 0.200 → qualified  (same as old gate)
+        sharpe=0.45, fitness=0.70, turnover=0.30 → 0.295 → qualified  (old gate would reject)
+        sharpe=0.40, fitness=None, turnover=None → 0.170 → rejected    (correct)
+        sharpe=0.80, fitness=0.70, turnover=0.25 → 0.437 → qualified   (strong alpha)
+    """
+    if brain_check_passed is False:
+        return 0.0, False
+    if sharpe is None:
+        return 0.0, False
+    if turnover is not None and turnover > 0.75:
+        return 0.0, False
+
+    # IS Sharpe: weight 0.60 (dominant factor)
+    # Maps [0, 2.0] → [0, 0.60]; sharpe=0.50 → 0.15, sharpe=1.0 → 0.30
+    sharpe_score = min(0.60, max(0.0, sharpe / 2.0 * 0.60))
+
+    # IS Fitness: weight 0.25 (secondary signal)
+    # Maps [0, 1.5] → [0, 0.25]; fitness=0.50 → 0.083, fitness=1.0 → 0.167
+    fitness_score = min(0.25, max(0.0, (fitness or 0.0) / 1.5 * 0.25)) if fitness is not None else 0.0
+
+    # Turnover: weight 0.10 (prefer low/moderate; neutral when unknown)
+    if turnover is None:
+        turnover_score = 0.05
+    else:
+        turnover_score = min(0.10, max(0.0, (0.75 - turnover) / 0.75 * 0.10))
+
+    # OOS consistency: up to 0.05 bonus — rewards stable IS→OOS transfer
+    oos_score = 0.0
+    if test_sharpe is not None and sharpe > 0:
+        oos_ratio = min(1.0, test_sharpe / sharpe)
+        oos_score = max(0.0, oos_ratio * 0.05)
+
+    score = sharpe_score + fitness_score + turnover_score + oos_score
+    return round(score, 4), score >= _CASE_C_THRESHOLD
 
 
 def phase0_mode(mode: str) -> str:
