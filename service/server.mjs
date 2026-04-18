@@ -58,6 +58,7 @@ const SCHEDULER_STATE_PATH = path.join(RUNS_DIR, "scheduler-state.json");
 const AUTO_REPAIR_ENABLED = process.env.AUTO_REPAIR_ENABLED !== "false";
 const AUTO_REPAIR_ENGINE = normalizeEngine(process.env.AUTO_REPAIR_ENGINE ?? "python-v2");
 const AUTO_REPAIR_MAX_ROUNDS = clampInt(process.env.AUTO_REPAIR_MAX_ROUNDS, 5, 1, 10);
+const AUTO_REPAIR_MAX_QUEUE = clampInt(process.env.AUTO_REPAIR_MAX_QUEUE, 5, 1, 20);
 const AUTO_REPAIR_BATCH_SIZE = clampInt(process.env.AUTO_REPAIR_BATCH_SIZE, 5, 1, 10);
 const REPAIR_TARGET_SHARPE = parseFloat(process.env.REPAIR_TARGET_SHARPE ?? "1.25");
 const REPAIR_TARGET_FITNESS = parseFloat(process.env.REPAIR_TARGET_FITNESS ?? "1.0");
@@ -694,9 +695,11 @@ async function tickScheduler() {
   // Heal any stuck activeRepair first (e.g. createRun threw before spawning the process)
   if (AUTO_REPAIR_ENABLED) await recoverStuckActiveRepair();
 
-  // Drain repair queue opportunistically: if items are waiting and nothing is
-  // running, kick off the next repair without waiting for a mining run to finish.
-  if (AUTO_REPAIR_ENABLED && autoLoopState.queue.length > 0 && !autoLoopState.activeRepair && !hasRunningRun()) {
+  // Drain repair queue opportunistically — but yield to the scheduler if mining
+  // is already past due so generation is never starved by a long repair streak.
+  const miningPastDue = schedulerState.enabled && !!schedulerState.nextRunAt &&
+    Date.now() > Date.parse(schedulerState.nextRunAt);
+  if (AUTO_REPAIR_ENABLED && autoLoopState.queue.length > 0 && !autoLoopState.activeRepair && !hasRunningRun() && !miningPastDue) {
     await startNextAutoRepairRun();
     return;
   }
@@ -1496,8 +1499,9 @@ async function handleRunFinished(runState) {
     return;
   }
 
-  // Still within repair budget — re-queue repair-worthy candidates
-  const repairCandidates = chooseRepairCandidates(candidates, 3);
+  // Still within repair budget — re-queue only the single best candidate to
+  // prevent exponential queue growth (each repair run was adding up to 3, net +2).
+  const repairCandidates = chooseRepairCandidates(candidates, 1);
   if (repairCandidates.length > 0) {
     const source = runState.source === "repair" ? "repair-run-finished" : "run-finished";
     for (const candidate of repairCandidates) {
@@ -1563,6 +1567,12 @@ async function enqueueRepairFromGate({ alpha, gate, source, sourceRunId, repairD
     pushAutoLoopEvent({ type: "repair-budget-exhausted", alphaId, ownerId, repairDepth, source });
     await saveAutoLoopState();
     return { queued: false, runId: null, reason: "repair budget exhausted" };
+  }
+  if (autoLoopState.queue.length >= AUTO_REPAIR_MAX_QUEUE) {
+    console.log(`[enqueueRepair] SKIP: queue full (${autoLoopState.queue.length}/${AUTO_REPAIR_MAX_QUEUE}) alphaId=${alphaId}`);
+    pushAutoLoopEvent({ type: "repair-queue-full", alphaId, ownerId, source });
+    await saveAutoLoopState();
+    return { queued: false, runId: null, reason: "repair queue full" };
   }
   if (autoLoopState.queue.some((item) => item.parentAlphaId === alphaId) || autoLoopState.activeRepair?.parentAlphaId === alphaId) {
     console.log(`[enqueueRepair] SKIP: already queued alphaId=${alphaId}`);
