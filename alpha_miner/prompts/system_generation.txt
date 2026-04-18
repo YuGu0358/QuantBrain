@@ -20,9 +20,9 @@ When mode is "repair", you MUST follow these rules — do NOT generate generic a
    LOW_FITNESS (fitness < 0.5):
    FITNESS = PnL / TVR. Fix by EITHER boosting PnL (stronger signal) OR reducing TVR (smoother).
    Prefer whichever has more room to improve. Do NOT sacrifice Sharpe just to lower turnover.
-   → If turnover > 60%: reduce it — wrap fastest sub-expression with ts_decay_linear(x, 15)
-   → If turnover 20–60% AND Sharpe is weak: focus on boosting signal — blend a second factor
-   → If turnover < 20%: turnover is NOT the problem — the signal itself is weak or concentrated
+   → If turnover > 65%: reduce it — wrap fastest sub-expression with ts_decay_linear(x, 15)
+   → If turnover 30–65% AND Sharpe is weak: focus on boosting signal — blend a second factor
+   → If turnover < 30%: turnover is NOT the problem — the signal itself is weak or concentrated
      → Add a second independent signal additively: rank(A + B) for diversification
      → Switch to a fundamentals anchor (operating_income/assets, cashflow_op/assets)
    → Always: use group_rank(expr, industry) outer wrapper for broad sector coverage
@@ -176,7 +176,7 @@ Regression neutralize:        regression_neut(y, x) removes x's influence from y
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 FITNESS + SHARPE — THE TWO PRIMARY TARGETS
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-PRIORITY ORDER: (1) IS Sharpe ≥ 0.7  (2) Fitness ≥ 1.0  (3) Turnover within 3–40%
+PRIORITY ORDER: (1) IS Sharpe ≥ 0.7  (2) Fitness ≥ 1.0  (3) Turnover within 3–70%
 Do NOT sacrifice Sharpe or signal quality just to push turnover lower.
 A strong signal with 30% turnover and Sharpe 0.9 is far better than a smooth signal with Sharpe 0.4.
 
@@ -190,7 +190,7 @@ FITNESS CHECKLIST — apply to EVERY expression before finalizing:
   ✓ Outer layer: group_rank(expr, industry) OR rank(expr) — NEVER raw signal as output
   ✓ At least one smoothing operator present (ts_mean, ts_rank, ts_decay_linear, or ts_zscore)
   ✓ Minimum 2 distinct data fields for diversification
-  ✓ Estimated turnover: 3%–40% (BRAIN hard limit is 70%; avoid below 1%)
+  ✓ Estimated turnover: 3%–70% (BRAIN hard limit; avoid below 1%)
   ✓ Signal must have meaningful cross-sectional spread — not all stocks clumped near zero
 
 HIGH-FITNESS + HIGH-SHARPE PATTERNS:
@@ -209,13 +209,13 @@ ANTI-PATTERNS (clear failure modes to avoid):
 TURNOVER — SECONDARY CONSTRAINT (keep within bounds, don’t over-optimize)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 BRAIN hard limits: <1% (stale, rejected) or >70% (excessive, rejected).
-ACCEPTABLE RANGE: 3%–40%. Do NOT over-smooth signals just to push turnover below 15%.
+ACCEPTABLE RANGE: 3%–70% (BRAIN’s hard ceiling). Do NOT over-smooth signals.
 A signal with 25-35% turnover but Sharpe 0.9 is far preferable to a slow signal with Sharpe 0.4.
 
 TURNOVER IS A PROBLEM ONLY WHEN:
   - Turnover > 60%: BRAIN rejects; reduce by adding ts_mean(x, 21) or ts_decay_linear(x, 15)
   - Turnover < 1%: BRAIN rejects; add faster component or shorten windows
-  - Fitness < 0.5 AND turnover > 40%: the ratio is broken; smooth the fastest sub-expression
+  - Fitness < 0.5 AND turnover > 60%: the ratio is broken; smooth the fastest sub-expression
 
 OPERATORS BY TURNOVER IMPACT (reference only — choose for SIGNAL QUALITY, not low turnover):
   High turnover: ts_delta(x, d<10), delta(x,1), sign(volatile), ts_zscore(x, d<5)
@@ -224,7 +224,7 @@ OPERATORS BY TURNOVER IMPACT (reference only — choose for SIGNAL QUALITY, not 
 
 RULES:
 1. Choose operators and windows that maximize SIGNAL PREDICTIVENESS, not minimize turnover
-2. Only add ts_decay_linear or longer windows if turnover is genuinely >50% or fitness < 0.5
+2. Only add ts_decay_linear or longer windows if turnover is genuinely >60% or fitness < 0.5
 3. Fundamental signals (assets, cashflow_op, operating_income, est_eps) are quarterly — naturally stable
 4. Combining a fast signal with a slow signal diversifies the alpha and may improve Sharpe
 5. group_rank() and rank() alone do NOT change turnover; they change cross-sectional ordering
@@ -293,7 +293,7 @@ The user_input JSON contains keys derived from real backtesting history:
 
 SYNTHESIS RULE: If failure_patterns_to_avoid contains "LOW_SHARPE" — add group_rank
 neutralization and blend an independent second signal. If it contains "LOW_FITNESS" AND turnover
-was >50%, add ts_decay_linear smoothing; if turnover was <30%, the signal is weak — redesign it.
+was >60%, add ts_decay_linear smoothing; if turnover was <50%, the signal is weak — redesign it.
 If strategy_stats.win_rate < 0.15, bias towards structural novelty (category blend, new fields).
 ━━━━━━━━━━━━━━━━━━━━━━━━━
 QUALITY REQUIREMENTS
@@ -305,7 +305,7 @@ QUALITY REQUIREMENTS
 - Each candidate must have a UNIQUE expression
 - Generate exactly n candidates covering diverse signal combinations
 - hypothesis field: 2-3 sentences explaining economic intuition AND why multi-variable combination matters
-- Each expression must target 3%–40% daily turnover (use smoothing operators)
+- Each expression must target 3%–70% daily turnover (BRAIN hard ceiling; avoid below 1%)
 - Each expression must be designed for IS/OOS robustness (test_sharpe / is_sharpe ≥ 0.7 target)
 
 FORBIDDEN (never use): sma, ema, momentum, price, book_value, pe_ratio, market_cap, beta, rsi, macd, stoch, obv, atr, bollinger, roc, williams, cci, dmi, aroon, pivot, fib, ichimoku, or ANY name not in the allowed lists above.

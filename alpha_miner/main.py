@@ -344,7 +344,7 @@ def main() -> None:
         s_old = float(metrics_orig.get("isSharpe") or metrics_orig.get("sharpe") or 0)
         f_old = float(metrics_orig.get("isFitness") or metrics_orig.get("fitness") or 0)
         t_old = float(metrics_orig.get("turnover") or 0)
-        j_old = s_old * f_old - 0.5 * max(0.0, t_old - 0.4)
+        j_old = s_old * f_old - 0.5 * max(0.0, t_old - 0.7)
         sched_outcomes = []
         for r in evaluated_records:
             bt = r.get("backtest", {})
@@ -354,7 +354,7 @@ def main() -> None:
                 "llm_mutation",
             )
             j_new = (float(bt.get("sharpe") or 0) * float(bt.get("fitness") or 0)
-                     - 0.5 * max(0.0, float(bt.get("turnover") or 0) - 0.4))
+                     - 0.5 * max(0.0, float(bt.get("turnover") or 0) - 0.7))
             accepted_r = r.get("dsr") is not None and r.get("orthogonality", {}).get("passed", False)
             sched_outcomes.append({"action_type": action_type, "accepted": accepted_r, "j_old": j_old, "j_new": j_new})
         scheduler.record_batch_outcomes(sched_outcomes)
@@ -582,9 +582,9 @@ def _kb_write_back(kb, category, candidate, result, accepted: bool) -> None:
         if result.sharpe < 0.4:
             reason = "LOW_SHARPE"
             suggested_fix = "Add group_rank neutralization and blend an independent second signal to boost Sharpe"
-        elif result.fitness is not None and result.fitness < 0.5 and turnover > 0.50:
+        elif result.fitness is not None and result.fitness < 0.5 and turnover > 0.60:
             reason = "LOW_FITNESS_HIGH_TURNOVER"
-            suggested_fix = "Turnover >50% is crushing fitness — wrap fastest sub-expression with ts_decay_linear(x, 15)"
+            suggested_fix = "Turnover >60% is crushing fitness — wrap fastest sub-expression with ts_decay_linear(x, 15)"
         elif result.fitness is not None and result.fitness < 0.5:
             reason = "LOW_FITNESS_WEAK_SIGNAL"
             suggested_fix = "Signal is weak despite acceptable turnover — add a second independent factor or switch category"
