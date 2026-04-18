@@ -578,15 +578,19 @@ def _kb_write_back(kb, category, candidate, result, accepted: bool) -> None:
             metadata={"sharpe": result.sharpe, "fitness": result.fitness, "turnover": result.turnover},
         )
     elif result.sharpe is not None:
-        if result.fitness is not None and result.fitness < 0.5:
-            reason = "LOW_FITNESS"
-            suggested_fix = "Wrap volatile sub-expressions with ts_decay_linear(expr, 15) to reduce turnover below 15%"
-        elif result.sharpe < 0.4:
+        turnover = result.turnover or 0.0
+        if result.sharpe < 0.4:
             reason = "LOW_SHARPE"
-            suggested_fix = "Add group_rank neutralization and blend a complementary signal type"
+            suggested_fix = "Add group_rank neutralization and blend an independent second signal to boost Sharpe"
+        elif result.fitness is not None and result.fitness < 0.5 and turnover > 0.50:
+            reason = "LOW_FITNESS_HIGH_TURNOVER"
+            suggested_fix = "Turnover >50% is crushing fitness — wrap fastest sub-expression with ts_decay_linear(x, 15)"
+        elif result.fitness is not None and result.fitness < 0.5:
+            reason = "LOW_FITNESS_WEAK_SIGNAL"
+            suggested_fix = "Signal is weak despite acceptable turnover — add a second independent factor or switch category"
         else:
             reason = "FAILED_GATE"
-            suggested_fix = "Check operator structure and try different parameter windows"
+            suggested_fix = "Check orthogonality or DSR; try different operator structure"
         if reason in ("LOW_FITNESS", "LOW_SHARPE"):
             kb.upsert_example(
                 item_id=f"fail_{candidate.id}",

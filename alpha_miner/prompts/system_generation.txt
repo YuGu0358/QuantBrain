@@ -17,16 +17,16 @@ When mode is "repair", you MUST follow these rules — do NOT generate generic a
    → Try switching category (e.g., pure momentum → quality×momentum hybrid)
    → Use longer lookback (63→126 days) for more stable cross-sectional ranking
 
-   LOW_FITNESS (fitness < 0.5, even if Sharpe is OK):
-   FITNESS = PnL / TVR — low fitness means TURNOVER IS TOO HIGH relative to return.
-   → First check: is turnover > 20%? If YES, turnover reduction is the primary fix.
-   → Wrap the entire expression with ts_decay_linear(expr, 15) to halve position churn
-   → Replace ts_delta(x, d<10) with ts_mean(x, 21) in all sub-expressions
-   → Replace ts_zscore(x, d<15) with ts_rank(x, 63) — rank is smoother
-   → Use group_rank(expr, industry) outer wrapper to ensure broad balanced coverage
-   → Add a slow fundamental signal (operating_income/assets, cashflow_op/assets) as anchor
-   → If turnover already low (< 5%): signal is too concentrated → add rank(A + B) diversification
-   → Apply winsorize(expr, 0.05) before final rank to cap outliers that create jumpy positions
+   LOW_FITNESS (fitness < 0.5):
+   FITNESS = PnL / TVR. Fix by EITHER boosting PnL (stronger signal) OR reducing TVR (smoother).
+   Prefer whichever has more room to improve. Do NOT sacrifice Sharpe just to lower turnover.
+   → If turnover > 60%: reduce it — wrap fastest sub-expression with ts_decay_linear(x, 15)
+   → If turnover 20–60% AND Sharpe is weak: focus on boosting signal — blend a second factor
+   → If turnover < 20%: turnover is NOT the problem — the signal itself is weak or concentrated
+     → Add a second independent signal additively: rank(A + B) for diversification
+     → Switch to a fundamentals anchor (operating_income/assets, cashflow_op/assets)
+   → Always: use group_rank(expr, industry) outer wrapper for broad sector coverage
+   → Apply winsorize(expr, 0.05) if returns are outlier-driven
 
    HIGH_TURNOVER (>70%):
    → Replace short-window ts_delta(x, d<10) with ts_mean(x, 21) or ts_rank(x, 60)
@@ -174,64 +174,60 @@ Time structure:
 Regression neutralize:        regression_neut(y, x) removes x's influence from y
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-FITNESS — THE #1 SUBMISSION BARRIER (required ≥ 1.0; target ≥ 1.3)
+FITNESS + SHARPE — THE TWO PRIMARY TARGETS
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-BRAIN Fitness = Annualized_PnL / Annual_TVR  (profit per dollar of trading activity).
-It is NOT just a quality score — it is TURNOVER-PENALIZED RETURN.
-High Fitness requires: strong signal AND low position churn AND broad coverage.
+PRIORITY ORDER: (1) IS Sharpe ≥ 0.7  (2) Fitness ≥ 1.0  (3) Turnover within 3–40%
+Do NOT sacrifice Sharpe or signal quality just to push turnover lower.
+A strong signal with 30% turnover and Sharpe 0.9 is far better than a smooth signal with Sharpe 0.4.
 
-Fitness fails when:
-  - Turnover is too high (>20%): trading costs eat the return → Fitness collapses
+BRAIN Fitness = Annualized_PnL / Annual_TVR. Fitness fails when:
+  - Turnover is extremely high (>60%): churn overwhelms return
   - Signal is too concentrated (few stocks dominate): poor coverage penalty
-  - Positions flip too frequently: each flip has implicit cost even without explicit model
-  - Outlier-driven returns: one stock/period drives all PnL → inconsistent fitness
+  - Raw unsmoothed signal used as output: positions are too jumpy
+  - Outlier-driven returns: one stock/period drives all PnL
 
 FITNESS CHECKLIST — apply to EVERY expression before finalizing:
   ✓ Outer layer: group_rank(expr, industry) OR rank(expr) — NEVER raw signal as output
-  ✓ All sub-signals smoothed: ts_mean(x,≥21) OR ts_decay_linear(x,≥10) OR ts_rank(x,≥42)
-  ✓ No ts_delta(x, d<10) or ts_zscore(x, d<10) as final or outer-layer signal
+  ✓ At least one smoothing operator present (ts_mean, ts_rank, ts_decay_linear, or ts_zscore)
   ✓ Minimum 2 distinct data fields for diversification
-  ✓ Estimated turnover: 3%–15%
+  ✓ Estimated turnover: 3%–40% (BRAIN hard limit is 70%; avoid below 1%)
+  ✓ Signal must have meaningful cross-sectional spread — not all stocks clumped near zero
 
-HIGH-FITNESS PATTERNS (use these as structural templates):
-  group_rank(ts_decay_linear(signal, 20), industry)        → decay smoothing + sector neutral
-  group_rank(ts_rank(fund_field, 252), industry)           → annual fundamental rank, very stable
-  rank(ts_mean(A, 42) + ts_rank(B, 126))                  → additive blend, slow-moving
-  group_rank(ts_rank(cashflow_op/assets, 252), industry)   → gold standard quality factor
-  rank(ts_decay_linear(ts_delta(operating_income/assets, 63), 20))  → decay on quarterly change
+HIGH-FITNESS + HIGH-SHARPE PATTERNS:
+  group_rank(ts_rank(fund_field, 252) + ts_mean(returns, 63), industry)  → quality×momentum blend
+  group_rank(ts_delta(operating_income/assets, 63) + ts_rank(adv20, 63), industry)  → ROA improve + liquidity
+  rank(ts_mean(returns, 63) * ts_rank(volume/adv20, 60))  → volume-confirmed momentum
+  group_rank(ts_zscore(news_sentiment, 20) + ts_rank(cashflow_op/assets, 252), industry)  → sentiment×quality
 
-LOW-FITNESS ANTI-PATTERNS (never use these as final expressions):
+ANTI-PATTERNS (clear failure modes to avoid):
   rank(ts_delta(close, 1))              → single-day change, 100%+ turnover → fitness ≈ 0.1
   rank(sign(returns) * volume)          → sign() creates binary positions → concentrated
-  rank(ts_zscore(returns, 5))           → 5-day Z-score, very high turnover
   rank(news_sentiment)                  → raw field with no smoothing → jumpy positions
+  rank(ts_std_dev(returns, 5))          → ultra-short volatility, no predictive power
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-TURNOVER CONTROL (fitness depends on this)
+TURNOVER — SECONDARY CONSTRAINT (keep within bounds, don’t over-optimize)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-BRAIN rejects turnover <1% (stale) or >70% (excessive cost). But FITNESS degrades above 20%.
-TARGET RANGE: 3%–15% daily turnover for high fitness. Up to 25% acceptable with strong Sharpe.
+BRAIN hard limits: <1% (stale, rejected) or >70% (excessive, rejected).
+ACCEPTABLE RANGE: 3%–40%. Do NOT over-smooth signals just to push turnover below 15%.
+A signal with 25-35% turnover but Sharpe 0.9 is far preferable to a slow signal with Sharpe 0.4.
 
-OPERATORS THAT INCREASE TURNOVER (use carefully):
-  ts_delta(x, d)    where d < 10  — noisy short-diff creates rapid rank changes
-  delta(x, 1)                     — single-day change, very reactive
-  sign(volatile_signal)           — binary flip generates high churn
-  ts_zscore(x, d)   where d < 5  — ultra-short Z-score overfits noise
+TURNOVER IS A PROBLEM ONLY WHEN:
+  - Turnover > 60%: BRAIN rejects; reduce by adding ts_mean(x, 21) or ts_decay_linear(x, 15)
+  - Turnover < 1%: BRAIN rejects; add faster component or shorten windows
+  - Fitness < 0.5 AND turnover > 40%: the ratio is broken; smooth the fastest sub-expression
 
-OPERATORS THAT REDUCE TURNOVER — ranked by effectiveness for FITNESS:
-  ts_decay_linear(x, d) where d ≥ 10 — BEST for fitness: exponential-weighted decay smooths positions
-  ts_mean(x, d)     where d ≥ 21  — monthly smoothing stabilizes ranks
-  ts_rank(x, d)     where d ≥ 42  — relative rank is persistent (42+ days preferred)
-  delay(x, 1)                     — lagging signal reduces same-day flip
-  ts_arg_max / ts_arg_min(x, d)  — position of extreme, changes slowly
+OPERATORS BY TURNOVER IMPACT (reference only — choose for SIGNAL QUALITY, not low turnover):
+  High turnover: ts_delta(x, d<10), delta(x,1), sign(volatile), ts_zscore(x, d<5)
+  Medium:        ts_mean(x, 21), ts_zscore(x, 20), ts_corr(x,y,20)
+  Low turnover:  ts_rank(x, ≥42), ts_decay_linear(x, ≥10), fundamental fields (quarterly)
 
 RULES:
-1. PRIMARY smoothing: ts_decay_linear(signal, 10-20) before final rank — reduces turnover AND improves fitness
-2. FALLBACK smoothing: ts_mean(x,≥21) or ts_rank(x,≥42) if decay is not appropriate
-3. Fundamental signals (assets, cashflow_op, operating_income, est_eps) are quarterly — naturally low turnover
-4. Combining a fast signal (short-window) with a slow signal (long-window) REDUCES net turnover
-5. If your alpha uses ts_delta with d<10, wrap it: ts_decay_linear(ts_delta(x,d), 15) — not just ts_mean
-6. group_rank() and rank() alone do NOT change turnover; they change cross-sectional ordering
+1. Choose operators and windows that maximize SIGNAL PREDICTIVENESS, not minimize turnover
+2. Only add ts_decay_linear or longer windows if turnover is genuinely >50% or fitness < 0.5
+3. Fundamental signals (assets, cashflow_op, operating_income, est_eps) are quarterly — naturally stable
+4. Combining a fast signal with a slow signal diversifies the alpha and may improve Sharpe
+5. group_rank() and rank() alone do NOT change turnover; they change cross-sectional ordering
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 IS / OOS ROBUSTNESS — THE #1 REJECTION CAUSE
@@ -286,18 +282,19 @@ The user_input JSON contains keys derived from real backtesting history:
 
 "failure_patterns_to_avoid": ["reason1", "reason2", ...]
   - Failure patterns observed in prior backtests for this category.
-  - ACTIVELY AVOID these. If you see LOW_FITNESS patterns — apply ts_decay_linear wrappers.
-    If you see LOW_SHARPE — add group_rank neutralization or blend a different signal category.
+  - ACTIVELY AVOID these. If you see LOW_SHARPE — add group_rank neutralization or blend a
+    different signal category. If you see LOW_FITNESS — check turnover first: if >50%, smooth it;
+    if <30%, the signal is weak and needs redesign (not just smoothing).
   - These are real-world BRAIN rejection reasons, not theoretical concerns.
 
 "negative_wq101_context": [{"expression": ..., "hypothesis": ...}, ...]
   - Expressions that FAILED or are known to be overcrowded.
   - Do NOT replicate these structures. They are anti-examples.
 
-SYNTHESIS RULE: If failure_patterns_to_avoid contains "LOW_FITNESS" or "HIGH_TURNOVER", the
-FIRST thing you must do before generating any expression is verify it uses ts_decay_linear or
-ts_rank with window >= 42 as primary smoothing. If strategy_stats.win_rate < 0.15, deliberately
-bias towards structural novelty — try a category blend (e.g., QUALITY×MOMENTUM hybrid).
+SYNTHESIS RULE: If failure_patterns_to_avoid contains "LOW_SHARPE" — add group_rank
+neutralization and blend an independent second signal. If it contains "LOW_FITNESS" AND turnover
+was >50%, add ts_decay_linear smoothing; if turnover was <30%, the signal is weak — redesign it.
+If strategy_stats.win_rate < 0.15, bias towards structural novelty (category blend, new fields).
 ━━━━━━━━━━━━━━━━━━━━━━━━━
 QUALITY REQUIREMENTS
 ━━━━━━━━━━━━━━━━━━━━━━━━━

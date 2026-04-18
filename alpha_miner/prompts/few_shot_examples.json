@@ -1,22 +1,22 @@
 [
   {
     "category": "QUALITY",
-    "hypothesis": "Peer-relative cash return-on-assets ranked over a full year captures persistent quality with very low turnover. Annual fundamental rank is the highest-fitness operator pattern.",
+    "hypothesis": "Peer-relative cash return-on-assets ranked over a full year captures persistent quality. Annual fundamental rank provides strong IS/OOS Sharpe with naturally low turnover from quarterly data.",
     "expression": "group_rank(ts_rank(cashflow_op / assets, 252), industry)"
   },
   {
-    "category": "QUALITY",
-    "hypothesis": "Operating margin improvement smoothed via decay captures earnings-quality recovery with minimal position churn. Decay wrapper on fundamental delta is the key fitness booster.",
-    "expression": "group_rank(ts_decay_linear(ts_delta(operating_income / assets, 63), 20), industry)"
+    "category": "MOMENTUM",
+    "hypothesis": "Volume-confirmed sector-relative momentum: 63-day return momentum multiplied by relative volume rank. The two signals reinforce each other and the combination produces strong Sharpe in the 20-30% turnover range — acceptable because the signal is robust.",
+    "expression": "group_rank(ts_mean(returns, 63) * ts_rank(volume / adv20, 60), industry)"
   },
   {
-    "category": "MOMENTUM",
-    "hypothesis": "Sector-relative medium-term price momentum blended with analyst estimate revision. Slow ts_rank window (126 days) on returns keeps turnover in the 8-12% range for high fitness.",
-    "expression": "group_rank(ts_rank(returns, 126) + ts_decay_linear(ts_delta(est_eps, 63), 15), industry)"
+    "category": "QUALITY",
+    "hypothesis": "Profitability improvement blended with analyst estimate revision within sector. Two independent signals (fundamental + sentiment) produce higher Sharpe than either alone. Moderate turnover (~20%) is fine given the signal strength.",
+    "expression": "group_rank(ts_delta(operating_income / assets, 63) + ts_delta(est_eps, 63), industry)"
   },
   {
     "category": "REVERSAL",
-    "hypothesis": "Volume-weighted short-term reversal smoothed with decay to prevent over-trading. Raw reversal signals have terrible fitness; decay wrapper brings turnover from 60% to ~12%.",
-    "expression": "group_rank(ts_decay_linear(-ts_mean(returns, 5) * ts_rank(volume / adv20, 20), 15), subindustry)"
+    "hypothesis": "Statistical return overreaction (Z-score extreme) combined with quality anchor within sector. The quality filter prevents buying genuinely bad companies; the reversal signal provides the Sharpe edge. Turnover ~15-25%.",
+    "expression": "group_rank(-ts_zscore(returns, 21) + ts_rank(cashflow_op / assets, 252), industry)"
   }
 ]
