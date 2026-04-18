@@ -47,7 +47,16 @@ def main() -> None:
     # KB and AlphaPool use shared paths under RUNS_DIR so knowledge accumulates
     # across runs. Per-run output_dir is only for ephemeral artefacts (snapshots, logs).
     shared_dir = output_dir.parent
-    kb = KnowledgeBase(shared_dir / "knowledge_base.db")
+    kb_embedder = None
+    _openai_key = os.environ.get("OPENAI_API_KEY", "")
+    if _openai_key:
+        try:
+            from langchain_openai import OpenAIEmbeddings
+            kb_embedder = OpenAIEmbeddings(api_key=_openai_key, model="text-embedding-3-small")
+            print("[kb] embedder initialized (text-embedding-3-small)", flush=True)
+        except Exception as _emb_exc:
+            print(f"[kb] embedder unavailable, falling back to SQL search: {_emb_exc}", flush=True)
+    kb = KnowledgeBase(shared_dir / "knowledge_base.db", embedder=kb_embedder)
     kb.import_wq101_negative_examples(PACKAGE_ROOT / "seeds" / "wq101_alphas.json")
     _import_submitted_feedback(kb, shared_dir / "submitted_alphas.jsonl")
     cache = LLMCache(output_dir / "llm_cache")

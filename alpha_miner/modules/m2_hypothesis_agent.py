@@ -187,7 +187,7 @@ class HypothesisAgent:
         repair_context: dict | None = None,
         diagnosis: DiagnosisReport | None = None,
     ) -> dict[str, Any]:
-        context = self.kb.rag_context(category)
+        context = self.kb.rag_context(category, query=f"{objective} {category}")
         # Templates for the target category shown as positive examples
         positive_templates = [
             {"expression": expr, "hypothesis": hyp}
