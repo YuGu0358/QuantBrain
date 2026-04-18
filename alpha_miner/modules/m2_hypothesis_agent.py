@@ -95,7 +95,10 @@ class HypothesisAgent:
                     print(f"[repair_chain] generated {len(candidates_raw)} candidates via LangChain", flush=True)
                     return [Candidate(**c) for c in candidates_raw][:n]
             except Exception as exc:
-                print(f"[repair_chain] failed ({exc}), falling back to legacy path", flush=True)
+                import traceback
+                print(f"[repair_chain] ERROR: {type(exc).__name__}: {exc}", flush=True)
+                traceback.print_exc()
+                print(f"[repair_chain] falling back to legacy generation path", flush=True)
 
         request_payload = self._request_payload(objective, category, n, repair_context=repair_context, diagnosis=diagnosis)
         cached = self.cache.get(request_payload)

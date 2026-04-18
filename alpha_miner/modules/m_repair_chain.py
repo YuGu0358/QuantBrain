@@ -231,6 +231,10 @@ class RepairChain:
     def _ensure_agent(self, validator: Any = None) -> None:
         if self._agent_executor is not None:
             return
+        import os
+        tracing = os.environ.get("LANGCHAIN_TRACING_V2", "false")
+        project = os.environ.get("LANGCHAIN_PROJECT", "(not set)")
+        print(f"[repair_agent] initializing agent model={self._model_id} langsmith_tracing={tracing} project={project}", flush=True)
         from langchain_openai import ChatOpenAI, OpenAIEmbeddings
         from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
         from langchain.agents import create_openai_tools_agent, AgentExecutor
@@ -290,9 +294,13 @@ class RepairChain:
             output = result.get("output", "")
             candidates, diagnosis = _parse_agent_output(output, category)
             if candidates:
+                print(f"[repair_agent] generated {len(candidates)} candidates", flush=True)
                 return candidates, diagnosis
+            print(f"[repair_agent] agent returned no candidates, raw output: {output[:200]}", flush=True)
         except Exception as exc:
-            print(f"[repair_agent] agent failed: {exc}", flush=True)
+            import traceback
+            print(f"[repair_agent] ERROR {type(exc).__name__}: {exc}", flush=True)
+            traceback.print_exc()
 
         return [], {}
 
