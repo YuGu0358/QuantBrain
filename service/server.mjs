@@ -61,7 +61,7 @@ const AUTO_REPAIR_MAX_ROUNDS = clampInt(process.env.AUTO_REPAIR_MAX_ROUNDS, 5, 1
 const AUTO_REPAIR_BATCH_SIZE = clampInt(process.env.AUTO_REPAIR_BATCH_SIZE, 5, 1, 10);
 const REPAIR_TARGET_SHARPE = parseFloat(process.env.REPAIR_TARGET_SHARPE ?? "1.25");
 const REPAIR_TARGET_FITNESS = parseFloat(process.env.REPAIR_TARGET_FITNESS ?? "1.0");
-const REPAIR_TARGET_TURNOVER = parseFloat(process.env.REPAIR_TARGET_TURNOVER ?? "0.40");
+const REPAIR_TARGET_TURNOVER = parseFloat(process.env.REPAIR_TARGET_TURNOVER ?? "0.70");
 const AUTO_SUBMIT_ENABLED = process.env.AUTO_SUBMIT_ENABLED !== "false";
 const ALPHA_GENERATOR_STRATEGY = ["legacy", "diversity-v2"].includes(process.env.ALPHA_GENERATOR_STRATEGY)
   ? process.env.ALPHA_GENERATOR_STRATEGY
@@ -1450,7 +1450,7 @@ async function handleRunFinished(runState) {
     return;
   }
 
-  // Target met (Sharpe ≥ 1.25, fitness ≥ 1.0, turnover ≤ 40%) — stop repairing, count as success
+  // Target met (Sharpe ≥ 1.25, fitness ≥ 1.0, turnover ≤ 70%) — stop repairing, count as success
   if (targetMet) {
     if (runState.source === "repair") {
       pushRepairHistory({ alphaId: runState.parentAlphaId, expression: autoLoopState.activeRepair?.expression ?? null, failedChecks: autoLoopState.activeRepair?.failedChecks ?? [], repairDepth: runState.repairDepth ?? 0, outcome: "target-met", runId: runState.runId, bestMetrics });
@@ -3238,7 +3238,7 @@ body{display:flex}
       <span>目标阈值：</span>
       <span id="rp-target-sharpe" style="color:var(--t2)">夏普率 ≥ 1.25</span>
       <span id="rp-target-fitness" style="color:var(--t2)">Fitness ≥ 1.0</span>
-      <span id="rp-target-turnover" style="color:var(--t2)">换手率 ≤ 40%</span>
+      <span id="rp-target-turnover" style="color:var(--t2)">换手率 ≤ 70%</span>
       <span id="rp-max-rounds" style="color:var(--t2)">最多修复 3 次</span>
     </div>
     <div class="box" style="margin-bottom:16px" id="rp-active-box">
@@ -3724,7 +3724,7 @@ body{display:flex}
           var bm = h.bestMetrics || {};
           var sharpeCell = bm.isSharpe != null ? '<span style="color:' + (bm.isSharpe >= 1.25 ? 'var(--green)' : 'var(--red)') + ';font-weight:600">' + bm.isSharpe.toFixed(2) + '</span>' : '<span style="color:var(--t3)">–</span>';
           var fitCell = bm.fitness != null ? '<span style="color:' + (bm.fitness >= 1.0 ? 'var(--green)' : 'var(--red)') + '">' + bm.fitness.toFixed(2) + '</span>' : '<span style="color:var(--t3)">–</span>';
-          var toCell = bm.turnover != null ? '<span style="color:' + (bm.turnover <= 0.40 ? 'var(--green)' : 'var(--red)') + '">' + (bm.turnover*100).toFixed(1) + '%</span>' : '<span style="color:var(--t3)">–</span>';
+          var toCell = bm.turnover != null ? '<span style="color:' + (bm.turnover <= 0.70 ? 'var(--green)' : 'var(--red)') + '">' + (bm.turnover*100).toFixed(1) + '%</span>' : '<span style="color:var(--t3)">–</span>';
           return '<tr>' +
             '<td style="color:var(--blue);font-family:monospace;font-size:10px">' + esc((h.alphaId||'–').slice(0,16)) + '</td>' +
             '<td style="font-family:monospace;font-size:10px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(h.expression||'') + '">' + esc((h.expression||'–').slice(0,40)) + '</td>' +
