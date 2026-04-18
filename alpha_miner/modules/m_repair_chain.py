@@ -225,43 +225,69 @@ class RepairChain:
         self._model_id = model_id
         self._api_key = openai_api_key
         self._temperature = temperature
-        self._agent_executor = None
         self._embeddings = None
 
-    def _ensure_agent(self, validator: Any = None) -> None:
-        if self._agent_executor is not None:
-            return
+    def _ensure_llm(self, validator: Any = None) -> tuple:
+        """Initialize LLM, tools, and embeddings. Returns (llm_with_tools, tools, tool_map)."""
         import os
         tracing = os.environ.get("LANGCHAIN_TRACING_V2", "false")
         project = os.environ.get("LANGCHAIN_PROJECT", "(not set)")
-        print(f"[repair_agent] initializing agent model={self._model_id} langsmith_tracing={tracing} project={project}", flush=True)
-        from langchain_openai import ChatOpenAI, OpenAIEmbeddings
-        from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-        from langchain.agents import create_openai_tools_agent, AgentExecutor
+        print(f"[repair_agent] initializing model={self._model_id} langsmith_tracing={tracing} project={project}", flush=True)
 
-        self._embeddings = OpenAIEmbeddings(api_key=self._api_key, model="text-embedding-3-small")
+        from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+
+        if self._embeddings is None:
+            self._embeddings = OpenAIEmbeddings(api_key=self._api_key, model="text-embedding-3-small")
+
         tools = build_tools(self.memory, self._embeddings, validator)
+        tool_map = {t.name: t for t in tools}
 
         is_reasoning = self._model_id.startswith(("o1", "o3", "o4", "gpt-5"))
         llm_kwargs: dict[str, Any] = {"api_key": self._api_key, "model": self._model_id}
         if not is_reasoning:
             llm_kwargs["temperature"] = self._temperature
         llm = ChatOpenAI(**llm_kwargs)
+        llm_with_tools = llm.bind_tools(tools)
+        return llm_with_tools, tools, tool_map
 
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", _SYSTEM_PROMPT),
-            ("human", "{input}"),
-            MessagesPlaceholder(variable_name="agent_scratchpad"),
-        ])
+    def _run_tool_loop(self, llm_with_tools: Any, tool_map: dict, user_input: str, max_iterations: int = 8) -> str:
+        """Manual tool-calling loop compatible with LangChain 1.x. Returns final text output."""
+        from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage, AIMessage
 
-        agent = create_openai_tools_agent(llm, tools, prompt)
-        self._agent_executor = AgentExecutor(
-            agent=agent,
-            tools=tools,
-            max_iterations=8,
-            verbose=True,
-            return_intermediate_steps=True,
-        )
+        messages: list[Any] = [
+            SystemMessage(content=_SYSTEM_PROMPT),
+            HumanMessage(content=user_input),
+        ]
+
+        for iteration in range(max_iterations):
+            response = llm_with_tools.invoke(messages)
+            messages.append(response)
+
+            tool_calls = getattr(response, "tool_calls", None) or []
+            if not tool_calls:
+                # No more tool calls — this is the final answer
+                return response.content or ""
+
+            # Execute each requested tool
+            for tc in tool_calls:
+                tool_name = tc.get("name") or tc.get("function", {}).get("name", "")
+                tool_args = tc.get("args") or tc.get("function", {}).get("arguments", {})
+                tool_id = tc.get("id", f"call_{iteration}")
+                tool = tool_map.get(tool_name)
+                if tool is None:
+                    tool_result = f"Error: unknown tool '{tool_name}'"
+                else:
+                    try:
+                        tool_result = str(tool.invoke(tool_args))
+                    except Exception as exc:
+                        tool_result = f"Error running {tool_name}: {exc}"
+                messages.append(ToolMessage(content=tool_result, tool_call_id=tool_id))
+
+        # Exceeded max_iterations — return last AI message content if any
+        for msg in reversed(messages):
+            if isinstance(msg, AIMessage) and msg.content:
+                return msg.content
+        return ""
 
     def run(
         self,
@@ -274,8 +300,6 @@ class RepairChain:
         validator: Any = None,
     ) -> tuple[list[dict], dict]:
         """Run the repair agent. Returns (candidates, diagnosis)."""
-        self._ensure_agent(validator)
-
         sharpe = metrics.get("sharpe") or metrics.get("isSharpe")
         fitness = metrics.get("fitness") or metrics.get("isFitness")
         turnover = metrics.get("turnover")
@@ -290,13 +314,13 @@ class RepairChain:
         )
 
         try:
-            result = self._agent_executor.invoke({"input": user_input})
-            output = result.get("output", "")
+            llm_with_tools, tools, tool_map = self._ensure_llm(validator)
+            output = self._run_tool_loop(llm_with_tools, tool_map, user_input)
             candidates, diagnosis = _parse_agent_output(output, category)
             if candidates:
                 print(f"[repair_agent] generated {len(candidates)} candidates", flush=True)
                 return candidates, diagnosis
-            print(f"[repair_agent] agent returned no candidates, raw output: {output[:200]}", flush=True)
+            print(f"[repair_agent] no candidates parsed, output[:200]: {output[:200]}", flush=True)
         except Exception as exc:
             import traceback
             print(f"[repair_agent] ERROR {type(exc).__name__}: {exc}", flush=True)
@@ -320,8 +344,8 @@ class RepairChain:
             "forbidden_directions": fix_list if not accepted else [],
             "family_tag": "",
         })
-        # Reset agent so embeddings index rebuilds next call
-        self._agent_executor = None
+        # Reset embeddings so FAISS index rebuilds on next call
+        self._embeddings = None
 
 
 # ---------------------------------------------------------------------------

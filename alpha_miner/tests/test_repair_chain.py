@@ -203,21 +203,21 @@ def test_parse_agent_output_no_json():
 # record_outcome — persists to memory and resets agent
 # ---------------------------------------------------------------------------
 
-def test_record_outcome_resets_agent(chain):
-    chain._agent_executor = MagicMock()  # simulate initialized agent
+def test_record_outcome_resets_embeddings(chain):
+    chain._embeddings = MagicMock()  # simulate initialized embeddings
     chain.record_outcome(
         expression="rank(returns)",
         diagnosis={"primary_symptom": "low_sharpe"},
         candidates=[{"origin_refs": ["langchain_agent", "added ts_mean"]}],
         accepted=True,
     )
-    assert chain._agent_executor is None  # must be reset
+    assert chain._embeddings is None  # must be reset so FAISS rebuilds
     records = chain.memory.get_recent(limit=10)
     assert records[0]["accept_decision"] == "accepted"
 
 
 # ---------------------------------------------------------------------------
-# run() — mocked AgentExecutor
+# run() — mock _ensure_llm + _run_tool_loop
 # ---------------------------------------------------------------------------
 
 def test_run_returns_candidates_from_agent(chain):
@@ -228,33 +228,28 @@ def test_run_returns_candidates_from_agent(chain):
             {"expression": "group_rank(ts_rank(returns,63),industry)", "hypothesis": "longer", "fix_applied": "longer window"},
         ],
     })
-    mock_executor = MagicMock()
-    mock_executor.invoke.return_value = {"output": agent_output, "intermediate_steps": []}
-    chain._agent_executor = mock_executor
-
-    candidates, diagnosis = chain.run(
-        expression="group_rank(returns, industry)",
-        metrics={"sharpe": 0.3, "fitness": 0.4, "turnover": 0.25},
-        failed_checks=["SHARPE"],
-        gate_reasons=["sharpe below 0.5"],
-        n=2,
-        category="MOMENTUM",
-    )
+    with patch.object(chain, "_ensure_llm", return_value=(MagicMock(), [], {})), \
+         patch.object(chain, "_run_tool_loop", return_value=agent_output):
+        candidates, diagnosis = chain.run(
+            expression="group_rank(returns, industry)",
+            metrics={"sharpe": 0.3, "fitness": 0.4, "turnover": 0.25},
+            failed_checks=["SHARPE"],
+            gate_reasons=["sharpe below 0.5"],
+            n=2,
+            category="MOMENTUM",
+        )
     assert len(candidates) == 2
     assert candidates[0]["category"] == "MOMENTUM"
     assert diagnosis["primary_symptom"] == "low_sharpe"
 
 
 def test_run_returns_empty_on_agent_failure(chain):
-    mock_executor = MagicMock()
-    mock_executor.invoke.side_effect = RuntimeError("LLM error")
-    chain._agent_executor = mock_executor
-
-    candidates, diagnosis = chain.run(
-        expression="rank(returns)",
-        metrics={"sharpe": 0.2},
-        failed_checks=["SHARPE"],
-        gate_reasons=[],
-    )
+    with patch.object(chain, "_ensure_llm", side_effect=RuntimeError("LLM error")):
+        candidates, diagnosis = chain.run(
+            expression="rank(returns)",
+            metrics={"sharpe": 0.2},
+            failed_checks=["SHARPE"],
+            gate_reasons=[],
+        )
     assert candidates == []
     assert diagnosis == {}
