@@ -44,9 +44,12 @@ def main() -> None:
     progress_path = output_dir / "progress.jsonl"
     append_jsonl(progress_path, {"stage": "started", "mode": args.mode, "objective": args.objective, "engine": "python-v2", "repairContext": args.repair_context})
 
-    kb = KnowledgeBase(output_dir / "alpha_pool.db")
+    # KB and AlphaPool use shared paths under RUNS_DIR so knowledge accumulates
+    # across runs. Per-run output_dir is only for ephemeral artefacts (snapshots, logs).
+    shared_dir = output_dir.parent
+    kb = KnowledgeBase(shared_dir / "knowledge_base.db")
     kb.import_wq101_negative_examples(PACKAGE_ROOT / "seeds" / "wq101_alphas.json")
-    _import_submitted_feedback(kb, output_dir.parent / "submitted_alphas.jsonl")
+    _import_submitted_feedback(kb, shared_dir / "submitted_alphas.jsonl")
     cache = LLMCache(output_dir / "llm_cache")
     taxonomy = load_taxonomy()
     router = None
@@ -76,7 +79,7 @@ def main() -> None:
         dsr_threshold=float(config.get("stat", {}).get("dsr_threshold", 0.95)),
         pbo_threshold=float(config.get("stat", {}).get("pbo_threshold", 0.30)),
     )
-    alpha_pool = AlphaPool(output_dir / "alpha_pool.db", threshold=float(config.get("pool", {}).get("orthogonality_threshold", 0.5)))
+    alpha_pool = AlphaPool(shared_dir / "alpha_pool.db", threshold=float(config.get("pool", {}).get("orthogonality_threshold", 0.5)))
     backtester = BrainBacktester(output_dir, config)
     optimizer = PortfolioOptimizer(
         max_weight=float(config.get("pool", {}).get("max_weight", 0.15)),
