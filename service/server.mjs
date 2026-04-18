@@ -1440,11 +1440,13 @@ async function handleRunFinished(runState) {
   const repairCandidatesPre = chooseRepairCandidates(candidates, 3);
   console.log(`[handleRunFinished] runId=${runState.runId} mode=${runState.mode} source=${runState.source} candidates=${candidates.length} repairEligible=${repairCandidatesPre.length} outputDir=${runState.outputDir}`);
   if (candidates.length > 0) {
-    // Log all candidates' check summaries to diagnose why repairEligible might be 0
+    // Log up to 5 candidates' check summaries to diagnose repair eligibility
     for (const c of candidates.slice(0, 5)) {
       const gate = evaluateCandidateGate(c);
-      const failed = failedCheckNames(gate);
-      console.log(`[handleRunFinished] cand alphaId=${c.alphaId?.slice(0,16)} checks=${JSON.stringify(failed)} gateOk=${gate.ok} degraded=${c._degraded}`);
+      const allFailed = failedCheckNames(gate);
+      const qualFailed = allFailed.filter(n => n !== "SELF_CORRELATION" && n !== "ORTHOGONALITY");
+      const sharpe = c.metrics?.isSharpe ?? c.metrics?.testSharpe;
+      console.log(`[handleRunFinished] cand alphaId=${c.alphaId?.slice(0,16)} failed=${JSON.stringify(allFailed)} qualFailed=${qualFailed.length} sharpe=${sharpe} degraded=${c._degraded}`);
     }
   }
   const best = bestRepairCandidate(candidates);
@@ -1760,9 +1762,14 @@ function chooseRepairCandidates(candidates, maxItems = 3) {
       if (!candidate.alphaId && !candidate.expression) return false;
       const gate = evaluateCandidateGate(candidate);
       if (gate.ok) return false;
-      // Repair when 1-2 BRAIN checks failed; 3+ failures indicate fundamentally broken alpha
       const failed = failedCheckNames(gate);
-      return failed.length >= 1 && failed.length <= 2;
+      // SELF_CORRELATION/ORTHOGONALITY are platform diversity checks — exclude them from
+      // the "too broken to repair" count so a candidate that also has low sharpe+fitness
+      // can still enter the repair queue (3 total failures: SHARPE+FITNESS+SELF_CORRELATION).
+      const diversityChecks = new Set(["SELF_CORRELATION", "ORTHOGONALITY"]);
+      const qualityFailed = failed.filter(n => !diversityChecks.has(n));
+      // Repair when ≥1 total failure and ≤2 quality failures (SHARPE/FITNESS/TURNOVER/DSR).
+      return failed.length >= 1 && qualityFailed.length <= 2;
     })
     .sort((left, right) => repairPriority(right) - repairPriority(left))
     .slice(0, maxItems);

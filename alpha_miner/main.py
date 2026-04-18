@@ -236,9 +236,9 @@ def main() -> None:
                 # Degraded gate: accept alphas with sharpe >= 0.5 and reasonable turnover into
                 # the pool so the repair loop has candidates to work on and the dashboard
                 # shows progress. DSR cannot be computed without daily PnL, so we use a
-                # looser proxy: sharpe >= 0.5, turnover in [0.01, 0.70], no self-correlation.
+                # looser proxy: sharpe >= 0.5, turnover <= 0.70 (no lower bound), no self-correlation.
                 degraded_sharpe_ok = (result.sharpe is not None) and (result.sharpe >= 0.5)
-                degraded_turnover_ok = (result.turnover is None) or (0.01 <= result.turnover <= 0.70)
+                degraded_turnover_ok = (result.turnover is None) or (result.turnover <= 0.70)
                 degraded_ortho_ok = brain_check_passed is not False
                 if degraded_mode and result.alpha_id and degraded_sharpe_ok and degraded_turnover_ok and degraded_ortho_ok:
                     rejected_by_stage["no_pnl"] -= 1  # undo the initial increment
