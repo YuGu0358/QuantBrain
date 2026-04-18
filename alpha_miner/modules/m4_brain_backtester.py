@@ -145,10 +145,13 @@ class BrainBacktester:
             write_json(series_path, {"pnl": series, "source": "brain_api"})
         write_json(snapshot_path, snapshot)
 
-        metrics = alpha_payload.get("is", {}) if isinstance(alpha_payload, dict) else {}
-        sharpe = safe_float(metrics.get("sharpe"))
-        turnover = safe_float(metrics.get("turnover"))
-        fitness = safe_float(metrics.get("fitness"))
+        # Prefer alpha-level IS metrics; fall back to poll payload when no alpha was created
+        alpha_is = alpha_payload.get("is", {}) if isinstance(alpha_payload, dict) else {}
+        poll_is = poll_payload.get("is", {}) if isinstance(poll_payload, dict) else {}
+        metrics = alpha_is if alpha_is else poll_is
+        sharpe = safe_float(metrics.get("sharpe")) or safe_float(poll_payload.get("sharpe") if isinstance(poll_payload, dict) else None)
+        turnover = safe_float(metrics.get("turnover")) or safe_float(poll_payload.get("turnover") if isinstance(poll_payload, dict) else None)
+        fitness = safe_float(metrics.get("fitness")) or safe_float(poll_payload.get("fitness") if isinstance(poll_payload, dict) else None)
         append_jsonl(
             self.progress_path,
             {
