@@ -15,6 +15,7 @@ from alpha_miner.modules.m_repair_memory import RepairMemory
 from alpha_miner.modules.m_retriever import Retriever
 from alpha_miner.modules.m_planner import Planner, RepairPlan
 from alpha_miner.modules.m_scheduler import BanditScheduler
+from alpha_miner.modules.m_repair_chain import RepairChain
 
 
 @dataclass(frozen=True)
@@ -56,6 +57,7 @@ class HypothesisAgent:
         self.retriever: Retriever | None = None
         self.planner: Planner | None = None
         self.scheduler: BanditScheduler | None = None
+        self.repair_chain: RepairChain | None = None
 
     def sample_underweight_category(self, existing_counts: dict[str, int] | None = None) -> str:
         counts = existing_counts or {}
@@ -73,6 +75,28 @@ class HypothesisAgent:
         repair_context: dict | None = None,
         diagnosis: DiagnosisReport | None = None,
     ) -> list[Candidate]:
+        # --- LangChain repair path (takes priority when repair_chain is set) ---
+        is_repair_mode = repair_context is not None and bool(repair_context.get("expression"))
+        if is_repair_mode and self.repair_chain is not None:
+            try:
+                parent_expr = repair_context.get("expression", "")
+                failed_checks = repair_context.get("failedChecks") or []
+                gate_reasons = repair_context.get("gate", {}).get("reasons") or []
+                metrics = repair_context.get("metrics") or {}
+                candidates_raw, _diag = self.repair_chain.run(
+                    expression=parent_expr,
+                    metrics=metrics,
+                    failed_checks=failed_checks,
+                    gate_reasons=gate_reasons,
+                    n=n,
+                    category=category,
+                )
+                if candidates_raw:
+                    print(f"[repair_chain] generated {len(candidates_raw)} candidates via LangChain", flush=True)
+                    return [Candidate(**c) for c in candidates_raw][:n]
+            except Exception as exc:
+                print(f"[repair_chain] failed ({exc}), falling back to legacy path", flush=True)
+
         request_payload = self._request_payload(objective, category, n, repair_context=repair_context, diagnosis=diagnosis)
         cached = self.cache.get(request_payload)
         if cached.hit and cached.payload:

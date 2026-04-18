@@ -16,6 +16,7 @@ from alpha_miner.modules.m_repair_memory import RepairMemory
 from alpha_miner.modules.m_retriever import Retriever
 from alpha_miner.modules.m_planner import Planner
 from alpha_miner.modules.m_scheduler import BanditScheduler
+from alpha_miner.modules.m_repair_chain import RepairChain
 
 from .modules.common import PACKAGE_ROOT, append_jsonl, read_json, set_seed, write_json
 from .modules.config_loader import load_config, load_taxonomy
@@ -113,6 +114,15 @@ def main() -> None:
         repair_memory_path = output_dir.parent / "repair_memory.db"
         repair_memory = RepairMemory(repair_memory_path)
         agent.repair_memory = repair_memory
+        # LangChain repair chain (primary path)
+        openai_key = os.environ.get("OPENAI_API_KEY", "")
+        repair_model = os.environ.get("OPENAI_REPAIR_MODEL", os.environ.get("OPENAI_IDEA_MODEL", "gpt-4o"))
+        agent.repair_chain = RepairChain(
+            memory=repair_memory,
+            openai_api_key=openai_key,
+            model_id=repair_model,
+        )
+        # Legacy fallback (kept for compatibility)
         agent.retriever = Retriever(memory=repair_memory, router=router)
         scheduler = BanditScheduler(output_dir.parent / "repair_scheduler.db")
         agent.planner = Planner(router=router)
