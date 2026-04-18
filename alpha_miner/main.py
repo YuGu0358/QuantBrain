@@ -31,6 +31,12 @@ from .modules.m7_stat_significance import StatSignificance
 from .modules.m8_portfolio_optimizer import PortfolioOptimizer
 
 
+def _ts() -> str:
+    """Return current UTC time as ISO-8601 string for progress.jsonl 'at' field."""
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def main() -> None:
     args = parse_args()
     started = time.time()
@@ -43,7 +49,7 @@ def main() -> None:
     generation_cfg = config.get("generation", {})
     set_seed(int(generation_cfg.get("seed", 42)))
     progress_path = output_dir / "progress.jsonl"
-    append_jsonl(progress_path, {"stage": "started", "mode": args.mode, "objective": args.objective, "engine": "python-v2", "repairContext": args.repair_context})
+    append_jsonl(progress_path, {"at": _ts(), "stage": "started", "mode": args.mode, "objective": args.objective, "engine": "python-v2", "repairContext": args.repair_context})
 
     # KB and AlphaPool use shared paths under RUNS_DIR so knowledge accumulates
     # across runs. Per-run output_dir is only for ephemeral artefacts (snapshots, logs).
@@ -71,6 +77,12 @@ def main() -> None:
         if state_file.exists():
             router = LLMRouter.load_state(state_file)
             router._state_path = state_file
+            # Merge yaml providers missing from loaded state (fixes newly-added providers like claude_repair)
+            _yaml_router = LLMRouter.from_yaml()
+            for _key, _prov in _yaml_router._providers.items():
+                if _key not in router._providers:
+                    router._providers[_key] = _prov
+                    router._providers_by_role.setdefault(_prov.role, []).append(_prov)
         router.daily_budget_usd = float(os.environ.get("LLM_BUDGET_DAILY_USD", "3.60"))
     agent = HypothesisAgent(
         kb=kb,
@@ -198,7 +210,7 @@ def main() -> None:
             valid_candidates.append(candidate)
         else:
             rejected_by_stage["validator"] += 1
-            append_jsonl(progress_path, {"stage": "rejected", "reason": "validator", "candidate_id": candidate.id, "errors": result.errors})
+            append_jsonl(progress_path, {"at": _ts(), "stage": "rejected", "reason": "validator", "candidate_id": candidate.id, "errors": result.errors})
 
     round_payload = {
         "round": 1,
@@ -215,13 +227,13 @@ def main() -> None:
     blocked_reason = phase0_status if phase0_status in {"phase0_brain_probe_report_missing", "phase0_brain_probe_not_actionable"} else None
     degraded_mode = phase0_status == "regular_tier_degraded_no_daily_pnl"
     if blocked_reason:
-        append_jsonl(progress_path, {"stage": "blocked", "reason": blocked_reason})
+        append_jsonl(progress_path, {"at": _ts(), "stage": "blocked", "reason": blocked_reason})
     elif args.mode in {"evaluate", "loop"}:
         for candidate in valid_candidates:
             try:
                 result = backtester.submit_alpha(candidate.expression, period="IS", settings=sim_settings or None)
             except QuotaWaiting as error:
-                append_jsonl(progress_path, {"stage": "waiting", "reason": str(error)})
+                append_jsonl(progress_path, {"at": _ts(), "stage": "waiting", "reason": str(error)})
                 break
             record = {"candidate": asdict(candidate), "backtest": asdict(result)}
             if result.pnl_path:
@@ -257,7 +269,7 @@ def main() -> None:
                         if brain_check.passed is False:
                             rejected_by_stage["orthogonality"] += 1
                     except QuotaWaiting as error:
-                        append_jsonl(progress_path, {"stage": "waiting", "reason": str(error), "alpha_id": result.alpha_id})
+                        append_jsonl(progress_path, {"at": _ts(), "stage": "waiting", "reason": str(error), "alpha_id": result.alpha_id})
                         record["brainCheckOrthogonality"] = {"status": "waiting", "reason": str(error)}
                 # Degraded gate: composite score replaces the three separate boolean flags.
                 # Accepts alphas where case_c_robust_score >= 0.20 so the repair loop has
@@ -303,7 +315,7 @@ def main() -> None:
                 _kb_write_back(kb, category, candidate, result, _accepted)
             except Exception as _kb_exc:
                 print(f"[kb] write-back failed: {_kb_exc}", flush=True)
-            append_jsonl(progress_path, {"stage": "evaluated", "candidate_id": candidate.id, "status": result.status})
+            append_jsonl(progress_path, {"at": _ts(), "stage": "evaluated", "candidate_id": candidate.id, "status": result.status})
 
     if repair_ctx is not None and repair_memory is not None:
         tried = [
@@ -348,7 +360,7 @@ def main() -> None:
             tried_candidates=tried,
             accepted_expression=accepted_expr,
         )
-        append_jsonl(progress_path, {"stage": "distilled", "accepted": accepted_expr is not None})
+        append_jsonl(progress_path, {"at": _ts(), "stage": "distilled", "accepted": accepted_expr is not None})
         # Bandit scheduler: record action outcomes
         metrics_orig = repair_ctx.get("metrics", {})
         s_old = float(metrics_orig.get("isSharpe") or metrics_orig.get("sharpe") or 0)
@@ -368,7 +380,7 @@ def main() -> None:
             accepted_r = r.get("dsr") is not None and r.get("orthogonality", {}).get("passed", False)
             sched_outcomes.append({"action_type": action_type, "accepted": accepted_r, "j_old": j_old, "j_new": j_new})
         scheduler.record_batch_outcomes(sched_outcomes)
-        append_jsonl(progress_path, {"stage": "scheduler_updated", "weights": scheduler.get_weights()})
+        append_jsonl(progress_path, {"at": _ts(), "stage": "scheduler_updated", "weights": scheduler.get_weights()})
 
     portfolio = optimizer.optimize(portfolio_pool)
     write_json(output_dir / "portfolio.json", asdict(portfolio))
@@ -431,7 +443,7 @@ def main() -> None:
             router.save_state(global_state_path)
         except Exception:
             pass
-    append_jsonl(progress_path, {"stage": "finished", "summary": summary})
+    append_jsonl(progress_path, {"at": _ts(), "stage": "finished", "summary": summary})
     print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
 
 

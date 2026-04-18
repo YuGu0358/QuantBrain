@@ -3669,11 +3669,15 @@ body{display:flex}
         var el = $('ps-' + s);
         if (el) el.textContent = stageMap[s];
       });
-      // Update current task strip with latest log line
+      // Update current task strip: for python-v2 prefer latest progress event over raw stdout
       var ctDot2 = $('ct-dot'); var ctText2 = $('ct-text');
-      if (activeRun && lastLogLine) {
+      var taskDisplayLine = lastLogLine;
+      if (activeRun && activeRun.engine === 'python-v2' && activeRun.progressStats && activeRun.progressStats.recentEvents && activeRun.progressStats.recentEvents.length) {
+        taskDisplayLine = activeRun.progressStats.recentEvents[activeRun.progressStats.recentEvents.length - 1] || lastLogLine;
+      }
+      if (activeRun && taskDisplayLine) {
         if (ctDot2) ctDot2.className = 'ct-dot running';
-        if (ctText2) ctText2.textContent = lastLogLine.length > 80 ? lastLogLine.slice(0,80) + '\u2026' : lastLogLine;
+        if (ctText2) ctText2.textContent = taskDisplayLine.length > 80 ? taskDisplayLine.slice(0,80) + '\u2026' : taskDisplayLine;
       } else {
         if (ctDot2) ctDot2.className = 'ct-dot idle';
         if (ctText2) ctText2.textContent = '空闲';
@@ -3810,11 +3814,13 @@ body{display:flex}
           : '<div style="font-size:12px;color:var(--t3)">无活跃运行</div>';
         var pl = $('pipeline-log');
         if (pl) {
-          var logLines = runLogs.slice(-60).map(function(l){ return (l.at ? l.at.slice(11,19) : '') + ' ' + (l.line || ''); });
-          // For python-v2: fall back to progress.jsonl events when stdout logs are empty
-          if (!logLines.length && activeRun && activeRun.progressStats && activeRun.progressStats.recentEvents) {
-            logLines = activeRun.progressStats.recentEvents;
-          }
+          var progressEvents = activeRun && activeRun.progressStats && activeRun.progressStats.recentEvents;
+          var isV2Run = activeRun && activeRun.engine === 'python-v2';
+          // For python-v2: prefer meaningful progress.jsonl stage events over noisy raw stdout
+          var logLines = (isV2Run && progressEvents && progressEvents.length)
+            ? progressEvents
+            : runLogs.slice(-60).map(function(l){ return (l.at ? l.at.slice(11,19) : '') + ' ' + (l.line || ''); });
+          if (!logLines.length && progressEvents && progressEvents.length) logLines = progressEvents;
           pl.textContent = logLines.join('\\n') || '暂无进度数据';
         }
       }
