@@ -425,8 +425,17 @@ async function createRun(input, source, authContext = systemAuthContext()) {
   };
   activeRuns.set(runId, state);
 
-  child.stdout.on("data", (chunk) => appendLog(state, chunk.toString()));
-  child.stderr.on("data", (chunk) => appendLog(state, chunk.toString()));
+  const isRepair = source === "repair";
+  child.stdout.on("data", (chunk) => {
+    const text = chunk.toString();
+    appendLog(state, text);
+    if (isRepair) process.stdout.write(`[py-repair ${runId.slice(-8)}] ${text}`);
+  });
+  child.stderr.on("data", (chunk) => {
+    const text = chunk.toString();
+    appendLog(state, text);
+    if (isRepair) process.stderr.write(`[py-repair ${runId.slice(-8)}] ${text}`);
+  });
   child.on("exit", (code) => {
     state.status = code === 0 ? "completed" : "failed";
     state.exitCode = code;
