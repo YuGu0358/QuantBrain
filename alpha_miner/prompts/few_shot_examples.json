@@ -1,12 +1,22 @@
 [
   {
     "category": "QUALITY",
-    "hypothesis": "Peer-relative operating-income efficiency captures persistent quality while reducing sector structure.",
-    "expression": "group_rank(ts_rank(operating_income / assets, 252), industry)"
+    "hypothesis": "Peer-relative cash return-on-assets ranked over a full year captures persistent quality with very low turnover. Annual fundamental rank is the highest-fitness operator pattern.",
+    "expression": "group_rank(ts_rank(cashflow_op / assets, 252), industry)"
+  },
+  {
+    "category": "QUALITY",
+    "hypothesis": "Operating margin improvement smoothed via decay captures earnings-quality recovery with minimal position churn. Decay wrapper on fundamental delta is the key fitness booster.",
+    "expression": "group_rank(ts_decay_linear(ts_delta(operating_income / assets, 63), 20), industry)"
+  },
+  {
+    "category": "MOMENTUM",
+    "hypothesis": "Sector-relative medium-term price momentum blended with analyst estimate revision. Slow ts_rank window (126 days) on returns keeps turnover in the 8-12% range for high fitness.",
+    "expression": "group_rank(ts_rank(returns, 126) + ts_decay_linear(ts_delta(est_eps, 63), 15), industry)"
   },
   {
     "category": "REVERSAL",
-    "hypothesis": "Recent price pressure with volume exhaustion can revert over short horizons.",
-    "expression": "rank(ts_delta(volume, 20)) * rank(-returns)"
+    "hypothesis": "Volume-weighted short-term reversal smoothed with decay to prevent over-trading. Raw reversal signals have terrible fitness; decay wrapper brings turnover from 60% to ~12%.",
+    "expression": "group_rank(ts_decay_linear(-ts_mean(returns, 5) * ts_rank(volume / adv20, 20), 15), subindustry)"
   }
 ]
