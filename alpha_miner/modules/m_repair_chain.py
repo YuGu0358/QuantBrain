@@ -1,63 +1,218 @@
+"""LangChain Tool-calling Agent for alpha factor repair.
+
+The agent autonomously decides which tools to call and in what order:
+  diagnose_alpha → retrieve_repair_memory → generate_repair_variants → validate_expression
+"""
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 import numpy as np
 
 from alpha_miner.modules.m_repair_memory import RepairMemory
 
-_SYSTEM_PROMPT = """You are an expert WorldQuant BRAIN alpha factor repair specialist.
+# ---------------------------------------------------------------------------
+# System prompt
+# ---------------------------------------------------------------------------
 
-BRAIN OPERATOR REFERENCE:
-- Time series: ts_mean(x,d), ts_rank(x,d), ts_std_dev(x,d), ts_delta(x,d), ts_zscore(x,d), ts_corr(x,y,d), delay(x,d)
-- Cross-section: rank(x), zscore(x), group_rank(x, industry), group_rank(x, subindustry)
-- Math: divide(x,y), multiply(x,y), abs(x), log(x), power(x,n), sign(x)
-- Smoothing: ts_decay_linear(x,d) reduces turnover, ts_mean(x,d) smooths signals
-- Normalization: winsorize(x,p) clips outliers
+_SYSTEM_PROMPT = """You are a WorldQuant BRAIN alpha factor repair agent.
+
+Your goal: repair a failing alpha expression so it passes all quality checks.
+
+BRAIN OPERATORS:
+ts_mean(x,d), ts_rank(x,d), ts_std_dev(x,d), ts_delta(x,d), ts_zscore(x,d),
+ts_decay_linear(x,d), ts_corr(x,y,d), delay(x,d), rank(x), zscore(x),
+group_rank(x, industry), group_rank(x, subindustry),
+divide(x,y), multiply(x,y), abs(x), log(x), power(x,n), sign(x), winsorize(x,p)
 
 REPAIR PRINCIPLES:
-- low_sharpe -> add complementary signals, try group_rank for sector neutralization, longer lookback windows
-- low_fitness -> normalize cross-sectionally with rank() or zscore(), blend with ts_mean for stability
-- high_turnover -> wrap with ts_decay_linear(x, 5-20) or ts_mean(x, 5-10), use longer windows (21+ days)
-- high_corrlib -> change primary data field or time horizon entirely
+- low_sharpe: longer lookback, add group_rank sector neutralization, blend complementary signals
+- low_fitness: wrap with rank() or zscore(), add ts_mean for cross-sectional stability
+- high_turnover: wrap with ts_decay_linear(x, 5-20) or extend window to 21+ days
+- high_corrlib: change primary data field or time horizon entirely
 
-GOLDEN RULES:
-1. Preserve the economic thesis — fix the symptom, not the concept
-2. Each candidate must be meaningfully different from the parent and from each other
-3. Use industry/subindustry ONLY inside group_rank(expr, industry)
-4. Keep operator depth <=12
-Return ONLY valid JSON — no markdown fences, no explanation outside JSON."""
-
-_HUMAN_PROMPT = """Repair this failing alpha expression.
-
-Parent expression: {expression}
-Metrics: {metrics_json}
-Failed checks: {failed_checks}
-Gate reasons: {gate_reasons}
-
-Historical repair context:
-{retrieved_context}
-
-Generate exactly {n} repair variants. Return JSON:
-{{
-  "diagnosis": {{
-    "primary_symptom": "low_sharpe|low_fitness|high_turnover|high_corrlib|high_complexity",
-    "root_cause": "one sentence",
-    "do_not_change": ["element1"]
-  }},
+WORKFLOW (follow this order):
+1. Call diagnose_alpha to understand the failure
+2. Call retrieve_repair_memory to learn from past repairs
+3. Call generate_repair_variants to create candidates
+4. Call validate_expression for each candidate
+5. Return your final answer as JSON ONLY — no other text:
+{
+  "diagnosis": {"primary_symptom": "<symptom>", "root_cause": "<cause>"},
   "candidates": [
-    {{
-      "expression": "valid BRAIN expression",
-      "hypothesis": "1-2 sentences: economic logic and what was fixed",
-      "fix_applied": "structural change description"
-    }}
+    {"expression": "<valid BRAIN expr>", "hypothesis": "<economic logic>", "fix_applied": "<what changed>"}
   ]
-}}"""
+}"""
 
+
+# ---------------------------------------------------------------------------
+# Tool factory — returns tools bound to shared state
+# ---------------------------------------------------------------------------
+
+def build_tools(memory: RepairMemory, embeddings: Any, validator: Any) -> list:
+    """Build LangChain tools with injected dependencies."""
+    from langchain_core.tools import tool
+
+    @tool
+    def diagnose_alpha(expression: str, sharpe: str, fitness: str, turnover: str, failed_checks: str) -> str:
+        """Diagnose why a BRAIN alpha expression is failing.
+        Args:
+            expression: The failing BRAIN alpha expression
+            sharpe: IS Sharpe ratio as string (e.g. '0.32')
+            fitness: IS Fitness score as string
+            turnover: Daily turnover as string (e.g. '0.45')
+            failed_checks: Comma-separated list of failed check names
+        Returns JSON with primary_symptom, root_cause, do_not_change, repair_strategy.
+        """
+        try:
+            s = float(sharpe) if sharpe not in ("", "null", "None") else None
+            f = float(fitness) if fitness not in ("", "null", "None") else None
+            t = float(turnover) if turnover not in ("", "null", "None") else None
+            checks = [c.strip() for c in failed_checks.split(",") if c.strip()]
+
+            # Rule-based diagnosis
+            if s is not None and s < 0.5:
+                primary = "low_sharpe"
+                strategy = "Add sector neutralization via group_rank, extend lookback window to 21-63 days, blend with complementary signal"
+            elif f is not None and f < 0.5:
+                primary = "low_fitness"
+                strategy = "Apply rank() or zscore() cross-sectionally, add ts_mean smoothing for stability"
+            elif t is not None and t > 0.7:
+                primary = "high_turnover"
+                strategy = "Wrap signal with ts_decay_linear(x, 10) or ts_mean(x, 5), use longer windows"
+            elif "CORRLIB" in failed_checks.upper() or "CORRELATION" in failed_checks.upper():
+                primary = "high_corrlib"
+                strategy = "Replace primary data field with uncorrelated alternative, change time horizon"
+            else:
+                primary = "low_sharpe"
+                strategy = "Diversify signal construction, add neutralization"
+
+            # Detect elements to preserve
+            do_not_change = []
+            if "group_rank" in expression and "industry" in expression:
+                do_not_change.append("industry neutralization")
+            if "group_rank" in expression and "subindustry" in expression:
+                do_not_change.append("subindustry neutralization")
+
+            result = {
+                "primary_symptom": primary,
+                "root_cause": f"Metrics: sharpe={sharpe}, fitness={fitness}, turnover={turnover}. Failed: {failed_checks}",
+                "do_not_change": do_not_change,
+                "repair_strategy": strategy,
+            }
+            return json.dumps(result)
+        except Exception as exc:
+            return json.dumps({"error": str(exc), "primary_symptom": "low_sharpe", "repair_strategy": "extend lookback and add neutralization"})
+
+    @tool
+    def retrieve_repair_memory(expression: str, symptoms: str, k: int = 5) -> str:
+        """Search historical repair cases semantically similar to the current failing expression.
+        Args:
+            expression: The failing expression to search similar cases for
+            symptoms: Comma-separated symptom names (e.g. 'low_sharpe,low_fitness')
+            k: Number of similar cases to retrieve
+        Returns formatted list of past successful and failed repairs.
+        """
+        try:
+            records = memory.get_recent(limit=500)
+            if not records:
+                return "No historical repair cases found yet."
+
+            if embeddings is not None:
+                query = f"{expression} {symptoms}"
+                import faiss
+                def _to_str(v: Any) -> str:
+                    return " ".join(v) if isinstance(v, list) else str(v or "")
+                texts = [
+                    f"{r.get('expression', '')} {_to_str(r.get('symptom_tags', []))} {_to_str(r.get('recommended_directions', []))}"
+                    for r in records
+                ]
+                vecs = np.array(embeddings.embed_documents(texts), dtype=np.float32)
+                faiss.normalize_L2(vecs)
+                index = faiss.IndexFlatIP(vecs.shape[1])
+                index.add(vecs)
+                q = np.array([embeddings.embed_query(query)], dtype=np.float32)
+                faiss.normalize_L2(q)
+                _, idxs = index.search(q, min(k, len(records)))
+                top = [records[i] for i in idxs[0] if 0 <= i < len(records)]
+            else:
+                top = records[:k]
+
+            lines = []
+            for i, r in enumerate(top, 1):
+                decision = r.get("accept_decision", "?")
+                expr = (r.get("expression") or "")[:80]
+                tags = ", ".join(v for v in (r.get("symptom_tags") or []) if v)
+                if decision == "accepted":
+                    dirs = ", ".join(v for v in (r.get("recommended_directions") or []) if v)
+                    lines.append(f"{i}. [SUCCESS] {expr} | {tags} | fix: {dirs}")
+                else:
+                    dirs = ", ".join(v for v in (r.get("forbidden_directions") or []) if v)
+                    lines.append(f"{i}. [FAILED]  {expr} | {tags} | avoid: {dirs}")
+            return "\n".join(lines) if lines else "No relevant past repairs found."
+        except Exception as exc:
+            return f"Retrieval error: {exc}"
+
+    @tool
+    def validate_expression(expression: str) -> str:
+        """Validate a BRAIN alpha expression for syntax correctness.
+        Args:
+            expression: The BRAIN alpha expression to validate
+        Returns 'VALID' if correct, or an error description if invalid.
+        """
+        if validator is None:
+            return "VALID (validator not available)"
+        try:
+            result = validator.validate(expression)
+            if result.valid:
+                return "VALID"
+            return f"INVALID: {'; '.join(result.errors)}"
+        except Exception as exc:
+            return f"INVALID: {exc}"
+
+    @tool
+    def generate_repair_variants(expression: str, diagnosis_json: str, memory_context: str, n: int = 3) -> str:
+        """Generate N repair variants of a failing expression.
+        Args:
+            expression: The original failing BRAIN expression
+            diagnosis_json: JSON string from diagnose_alpha tool
+            memory_context: Context string from retrieve_repair_memory tool
+            n: Number of variants to generate (default 3)
+        Returns JSON array of candidates with expression, hypothesis, fix_applied.
+        """
+        # This tool returns a structured prompt for the LLM to fill in.
+        # The agent calling this tool will see its result and produce candidates.
+        try:
+            diag = json.loads(diagnosis_json) if isinstance(diagnosis_json, str) else diagnosis_json
+        except Exception:
+            diag = {"primary_symptom": "low_sharpe", "repair_strategy": "improve signal"}
+
+        symptom = diag.get("primary_symptom", "low_sharpe")
+        strategy = diag.get("repair_strategy", "improve signal construction")
+        do_not_change = diag.get("do_not_change", [])
+
+        hint = (
+            f"Parent expression: {expression}\n"
+            f"Symptom: {symptom}\n"
+            f"Strategy: {strategy}\n"
+            f"Preserve: {', '.join(do_not_change) or 'nothing specific'}\n"
+            f"Memory context:\n{memory_context}\n\n"
+            f"Generate {n} repair variants as JSON array:\n"
+            '[\n  {"expression": "...", "hypothesis": "...", "fix_applied": "..."},\n  ...\n]'
+        )
+        return hint
+
+    return [diagnose_alpha, retrieve_repair_memory, validate_expression, generate_repair_variants]
+
+
+# ---------------------------------------------------------------------------
+# RepairChain — Tool-calling Agent
+# ---------------------------------------------------------------------------
 
 class RepairChain:
-    """LangChain LCEL repair chain with FAISS semantic retrieval over RepairMemory."""
+    """LangChain Tool-calling Agent for alpha repair with FAISS semantic memory."""
 
     def __init__(
         self,
@@ -70,28 +225,39 @@ class RepairChain:
         self._model_id = model_id
         self._api_key = openai_api_key
         self._temperature = temperature
-        self._index_cache: tuple | None = None
-        self._chain = None
+        self._agent_executor = None
         self._embeddings = None
 
-    def _ensure_chain(self) -> None:
-        if self._chain is not None:
+    def _ensure_agent(self, validator: Any = None) -> None:
+        if self._agent_executor is not None:
             return
         from langchain_openai import ChatOpenAI, OpenAIEmbeddings
-        from langchain_core.prompts import ChatPromptTemplate
-        from langchain_core.output_parsers import JsonOutputParser
+        from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+        from langchain.agents import create_openai_tools_agent, AgentExecutor
 
         self._embeddings = OpenAIEmbeddings(api_key=self._api_key, model="text-embedding-3-small")
+        tools = build_tools(self.memory, self._embeddings, validator)
+
         is_reasoning = self._model_id.startswith(("o1", "o3", "o4", "gpt-5"))
         llm_kwargs: dict[str, Any] = {"api_key": self._api_key, "model": self._model_id}
         if not is_reasoning:
             llm_kwargs["temperature"] = self._temperature
         llm = ChatOpenAI(**llm_kwargs)
+
         prompt = ChatPromptTemplate.from_messages([
             ("system", _SYSTEM_PROMPT),
-            ("human", _HUMAN_PROMPT),
+            ("human", "{input}"),
+            MessagesPlaceholder(variable_name="agent_scratchpad"),
         ])
-        self._chain = prompt | llm | JsonOutputParser()
+
+        agent = create_openai_tools_agent(llm, tools, prompt)
+        self._agent_executor = AgentExecutor(
+            agent=agent,
+            tools=tools,
+            max_iterations=8,
+            verbose=True,
+            return_intermediate_steps=True,
+        )
 
     def run(
         self,
@@ -101,39 +267,37 @@ class RepairChain:
         gate_reasons: list[str],
         n: int = 3,
         category: str = "UNKNOWN",
+        validator: Any = None,
     ) -> tuple[list[dict], dict]:
-        """Run repair. Returns (candidates_list, diagnosis_dict)."""
-        self._ensure_chain()
-        retrieved = self._semantic_retrieve(expression, failed_checks, k=5)
-        result = self._chain.invoke({
-            "expression": expression,
-            "metrics_json": json.dumps(
-                {k: round(v, 4) if isinstance(v, float) else v for k, v in metrics.items() if v is not None},
-                ensure_ascii=False,
-            ),
-            "failed_checks": ", ".join(failed_checks) or "none",
-            "gate_reasons": "; ".join(gate_reasons[:3]) or "none",
-            "retrieved_context": self._format_retrieved(retrieved),
-            "n": n,
-        })
-        candidates_raw = result.get("candidates", [])
-        diagnosis = result.get("diagnosis", {})
-        candidates = [
-            {
-                "id": f"repair_{category.lower()}_{i:03d}",
-                "category": category,
-                "hypothesis": item.get("hypothesis", ""),
-                "expression": item.get("expression", ""),
-                "origin_refs": ["langchain_repair", item.get("fix_applied", "")],
-                "opt_rounds": 0,
-            }
-            for i, item in enumerate(candidates_raw)
-            if isinstance(item, dict) and item.get("expression")
-        ]
-        return candidates, diagnosis
+        """Run the repair agent. Returns (candidates, diagnosis)."""
+        self._ensure_agent(validator)
+
+        sharpe = metrics.get("sharpe") or metrics.get("isSharpe")
+        fitness = metrics.get("fitness") or metrics.get("isFitness")
+        turnover = metrics.get("turnover")
+
+        user_input = (
+            f"Repair this failing alpha expression:\n"
+            f"Expression: {expression}\n"
+            f"Sharpe: {sharpe}, Fitness: {fitness}, Turnover: {turnover}\n"
+            f"Failed checks: {', '.join(failed_checks) or 'none'}\n"
+            f"Gate reasons: {'; '.join(gate_reasons[:3]) or 'none'}\n"
+            f"Generate {n} repair variants."
+        )
+
+        try:
+            result = self._agent_executor.invoke({"input": user_input})
+            output = result.get("output", "")
+            candidates, diagnosis = _parse_agent_output(output, category)
+            if candidates:
+                return candidates, diagnosis
+        except Exception as exc:
+            print(f"[repair_agent] agent failed: {exc}", flush=True)
+
+        return [], {}
 
     def record_outcome(self, expression: str, diagnosis: dict, candidates: list[dict], accepted: bool) -> None:
-        """Persist repair outcome and invalidate FAISS cache."""
+        """Persist repair outcome to memory and reset FAISS cache."""
         symptom = diagnosis.get("primary_symptom", "")
         fix_list = [
             c["origin_refs"][1] for c in candidates
@@ -148,50 +312,61 @@ class RepairChain:
             "forbidden_directions": fix_list if not accepted else [],
             "family_tag": "",
         })
-        self._index_cache = None
+        # Reset agent so embeddings index rebuilds next call
+        self._agent_executor = None
 
-    def _semantic_retrieve(self, expression: str, failed_checks: list[str], k: int = 5) -> list[dict]:
-        records = self.memory.get_recent(limit=500)
-        if not records or self._embeddings is None:
-            return []
-        query = f"{expression} {' '.join(failed_checks)}"
+
+# ---------------------------------------------------------------------------
+# Output parser
+# ---------------------------------------------------------------------------
+
+def _parse_agent_output(output: str, category: str) -> tuple[list[dict], dict]:
+    """Extract candidates and diagnosis from agent final answer."""
+    # Try to find JSON block
+    json_match = re.search(r'\{[\s\S]*"candidates"[\s\S]*\}', output)
+    if json_match:
         try:
-            import faiss
-            if self._index_cache is None:
-                def _to_str(v: Any) -> str:
-                    return " ".join(v) if isinstance(v, list) else str(v or "")
-                texts = [
-                    f"{r.get('expression', '')} {_to_str(r.get('symptom_tags', []))} {_to_str(r.get('recommended_directions', []))}"
-                    for r in records
-                ]
-                vecs = np.array(self._embeddings.embed_documents(texts), dtype=np.float32)
-                faiss.normalize_L2(vecs)
-                index = faiss.IndexFlatIP(vecs.shape[1])
-                index.add(vecs)
-                self._index_cache = (index, records)
-            index, stored = self._index_cache
-            q = np.array([self._embeddings.embed_query(query)], dtype=np.float32)
-            faiss.normalize_L2(q)
-            _, idxs = index.search(q, min(k, len(stored)))
-            return [stored[i] for i in idxs[0] if 0 <= i < len(stored)]
-        except Exception:
-            return records[:k]
+            data = json.loads(json_match.group(0))
+            diagnosis = data.get("diagnosis", {})
+            raw_candidates = data.get("candidates", [])
+            candidates = [
+                {
+                    "id": f"repair_{category.lower()}_{i:03d}",
+                    "category": category,
+                    "hypothesis": item.get("hypothesis", ""),
+                    "expression": item.get("expression", ""),
+                    "origin_refs": ["langchain_agent", item.get("fix_applied", "")],
+                    "opt_rounds": 0,
+                }
+                for i, item in enumerate(raw_candidates)
+                if isinstance(item, dict) and item.get("expression")
+            ]
+            return candidates, diagnosis
+        except json.JSONDecodeError:
+            pass
 
-    def _format_retrieved(self, records: list[dict]) -> str:
-        if not records:
-            return "No historical repairs found."
-        lines = []
-        for i, r in enumerate(records, 1):
-            decision = r.get("accept_decision", "?")
-            expr = (r.get("expression") or "")[:80]
-            tags = ", ".join(v for v in (r.get("symptom_tags") or []) if v)
-            if decision == "accepted":
-                dirs = ", ".join(v for v in (r.get("recommended_directions") or []) if v)
-                lines.append(f"{i}. [SUCCESS] {expr} | {tags} | fix: {dirs}")
-            else:
-                dirs = ", ".join(v for v in (r.get("forbidden_directions") or []) if v)
-                lines.append(f"{i}. [FAILED]  {expr} | {tags} | avoid: {dirs}")
-        return "\n".join(lines)
+    # Fallback: scan for JSON array of candidates
+    array_match = re.search(r'\[[\s\S]*"expression"[\s\S]*\]', output)
+    if array_match:
+        try:
+            raw_candidates = json.loads(array_match.group(0))
+            candidates = [
+                {
+                    "id": f"repair_{category.lower()}_{i:03d}",
+                    "category": category,
+                    "hypothesis": item.get("hypothesis", ""),
+                    "expression": item.get("expression", ""),
+                    "origin_refs": ["langchain_agent", item.get("fix_applied", "")],
+                    "opt_rounds": 0,
+                }
+                for i, item in enumerate(raw_candidates)
+                if isinstance(item, dict) and item.get("expression")
+            ]
+            return candidates, {}
+        except json.JSONDecodeError:
+            pass
+
+    return [], {}
 
 
 __all__ = ["RepairChain"]
