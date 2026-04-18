@@ -10,15 +10,15 @@ providers:
     cost_per_1k_output: 0.150
     weight_initial: 1.0
 
-  # --- REPAIR ---
-  gpt45_repair:
+  # --- REPAIR (RepairChain uses Claude directly; this entry records outcomes for dashboard) ---
+  claude_repair:
     role: repair
-    model_id: gpt-5.4-2026-03-05
+    model_id: claude-opus-4-6
     api_base: null
-    api_key_env: OPENAI_API_KEY
-    client_type: openai_compat
-    cost_per_1k_input: 0.075
-    cost_per_1k_output: 0.150
+    api_key_env: ANTHROPIC_API_KEY
+    client_type: anthropic
+    cost_per_1k_input: 0.005
+    cost_per_1k_output: 0.025
     weight_initial: 1.0
 
   # --- JUDGE ---

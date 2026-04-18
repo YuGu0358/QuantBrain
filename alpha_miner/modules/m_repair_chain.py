@@ -23,6 +23,9 @@ Your goal: produce THE SINGLE BEST repair for a failing alpha expression.
 Do not generate multiple options — think carefully and commit to the one repair
 you are most confident will pass all quality checks.
 
+PRIORITY ORDER: (1) Maximize IS Sharpe  (2) Maximize Fitness  (3) Keep turnover 3–70%
+Do NOT blindly reduce turnover — a strong signal with 40% turnover beats a weak signal with 8%.
+
 BRAIN OPERATORS:
 ts_mean(x,d), ts_rank(x,d), ts_std_dev(x,d), ts_delta(x,d), ts_zscore(x,d),
 ts_decay_linear(x,d), ts_corr(x,y,d), delay(x,d), rank(x), zscore(x),
@@ -30,12 +33,15 @@ group_rank(x, industry), group_rank(x, subindustry),
 divide(x,y), multiply(x,y), abs(x), log(x), power(x,n), sign(x), winsorize(x,p)
 
 REPAIR PRINCIPLES:
-- low_sharpe: longer lookback (63→126d), add group_rank sector neutralization, blend complementary signal
-- low_fitness: FITNESS = PnL/TVR — primary cause is HIGH TURNOVER.
-  Wrap with ts_decay_linear(x, 15) to cut turnover in half; extend windows to ≥42d;
-  replace ts_delta(x,d<10) with ts_mean(x,21); use group_rank outer layer for coverage.
-- high_turnover: ts_decay_linear(x, 10-20) is the most effective fix; or extend all windows
-- high_corrlib: change primary data field or time horizon entirely
+- low_sharpe: add group_rank sector neutralization, extend lookback (63→126d),
+  blend an independent second signal (quality + momentum hybrid), switch category if needed
+- low_fitness: Fitness = PnL/TVR. Fix depends on the root cause:
+  * If turnover > 65%: THEN reduce it — wrap fastest sub-expression with ts_decay_linear(x, 15)
+  * If turnover < 50%: turnover is NOT the problem — signal is too weak or concentrated.
+    Add a second independent factor, switch to a fundamentals anchor, or diversify fields.
+  * Never over-smooth a signal just to reduce turnover below 20%.
+- high_turnover (>70%): ts_decay_linear(x, 10-15) or ts_mean(x, 21) on the fastest sub-expression
+- high_corrlib: change primary data field or time horizon entirely; use regression_neut()
 
 WORKFLOW (follow this order):
 1. Call diagnose_alpha to understand the failure
@@ -77,22 +83,25 @@ def build_tools(memory: RepairMemory, embeddings: Any, validator: Any) -> list:
             t = float(turnover) if turnover not in ("", "null", "None") else None
             checks = [c.strip() for c in failed_checks.split(",") if c.strip()]
 
-            # Rule-based diagnosis
+            # Rule-based diagnosis — priority: Sharpe first, Fitness second, Turnover as constraint
             if s is not None and s < 0.5:
                 primary = "low_sharpe"
-                strategy = "Add sector neutralization via group_rank, extend lookback window to 21-63 days, blend with complementary signal"
+                strategy = "Add group_rank sector neutralization; blend an independent second signal (e.g. quality+momentum); extend lookback to 63-126 days; try switching or blending category"
             elif f is not None and f < 0.5:
                 primary = "low_fitness"
-                strategy = "Apply rank() or zscore() cross-sectionally, add ts_mean smoothing for stability"
+                if t is not None and t > 0.65:
+                    strategy = "Turnover >65% is hurting Fitness — wrap the fastest sub-expression with ts_decay_linear(x, 15) or ts_mean(x, 21)"
+                else:
+                    strategy = "Turnover is acceptable; signal itself is too weak or concentrated — add a second independent factor, use a fundamentals anchor (cashflow_op/assets, operating_income/assets), or diversify fields"
             elif t is not None and t > 0.7:
                 primary = "high_turnover"
-                strategy = "Wrap signal with ts_decay_linear(x, 10) or ts_mean(x, 5), use longer windows"
+                strategy = "Turnover >70% hits BRAIN hard limit — wrap fastest sub-expression with ts_decay_linear(x, 10) or ts_mean(x, 21)"
             elif "CORRLIB" in failed_checks.upper() or "CORRELATION" in failed_checks.upper():
                 primary = "high_corrlib"
-                strategy = "Replace primary data field with uncorrelated alternative, change time horizon"
+                strategy = "Replace primary data field with uncorrelated alternative; change time horizon; use regression_neut(new_expr, old_expr)"
             else:
                 primary = "low_sharpe"
-                strategy = "Diversify signal construction, add neutralization"
+                strategy = "Diversify signal construction; add group_rank neutralization; blend independent signals"
 
             # Detect elements to preserve
             do_not_change = []

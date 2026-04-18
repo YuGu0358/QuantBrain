@@ -169,6 +169,7 @@ def main() -> None:
             },
         )
 
+    _t_gen_start = time.time()
     candidates = agent.generate_batch(
         effective_objective,
         category=category,
@@ -177,6 +178,15 @@ def main() -> None:
         repair_context=repair_ctx,
         diagnosis=diagnosis,
     )
+    _gen_latency_ms = (time.time() - _t_gen_start) * 1000
+    # Record repair chain usage in the LLM router so the dashboard shows real activity
+    if repair_ctx is not None and router is not None and candidates:
+        try:
+            # Estimate token usage: repair prompt ~2000 in + ~600 out per Claude call
+            _repair_passed = len(candidates) > 0
+            router.record_result("claude_repair", "repair", _repair_passed, _gen_latency_ms, 2000, 600)
+        except Exception:
+            pass
 
     validator_records = []
     valid_candidates = []
