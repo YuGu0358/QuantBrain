@@ -1431,11 +1431,18 @@ async function handleRunFinished(runState) {
   if (!AUTO_REPAIR_ENABLED && !AUTO_SUBMIT_ENABLED) return;
   autoLoopState.diversityStats = (await readRunDiversityStats(runState.outputDir)) ?? autoLoopState.diversityStats ?? null;
   if (!["evaluate", "loop"].includes(runState.mode)) {
+    console.log(`[handleRunFinished] mode=${runState.mode} skipped — not evaluate/loop`);
     if (runState.source === "repair") await clearActiveRepair(runState.runId);
     await saveAutoLoopState();
     return;
   }
   const candidates = await loadRunScoredCandidates(runState.outputDir);
+  const repairCandidatesPre = chooseRepairCandidates(candidates, 3);
+  console.log(`[handleRunFinished] runId=${runState.runId} mode=${runState.mode} source=${runState.source} candidates=${candidates.length} repairEligible=${repairCandidatesPre.length} outputDir=${runState.outputDir}`);
+  if (candidates.length > 0) {
+    const sample = candidates[0];
+    console.log(`[handleRunFinished] sample candidate: alphaId=${sample.alphaId} expression=${String(sample.expression||"").slice(0,60)} checks=${JSON.stringify((sample.checks||[]).map(c=>c.name+":"+c.result))}`);
+  }
   const best = bestRepairCandidate(candidates);
   const bestMetrics = extractBestMetrics(best);
   const targetMet = best ? candidateMeetsRepairTarget(best) : false;
