@@ -1648,7 +1648,7 @@ async function loadRunScoredCandidates(outputDir) {
   const pool = await maybeReadJson(path.join(outputDir, "pool.json"));
   if (pool?.records) {
     return pool.records
-      .filter((r) => r.backtest?.alpha_id)
+      .filter((r) => r.backtest != null)
       .map((r) => normalizePythonV2Candidate(r));
   }
   // legacy-js: read batch-round-N.json scored arrays
@@ -1710,9 +1710,13 @@ function normalizePythonV2Candidate(record) {
   }
 
   const dsr = record.dsr ?? null;
+  const expression = cand.expression ?? null;
+  // Use real BRAIN alpha_id when available; fall back to a synthetic hash so
+  // degraded-mode candidates (no BRAIN alpha created) can still enter the repair queue.
+  const alphaId = bt.alpha_id ?? (expression ? `expr-${simpleHash(expression)}` : null);
   return {
-    alphaId: bt.alpha_id,
-    expression: cand.expression ?? null,
+    alphaId,
+    expression,
     stage: "IS",
     totalScore: (dsr != null ? dsr : (sharpe ?? 0)),
     checks,
@@ -1738,7 +1742,7 @@ function chooseRepairCandidate(candidates) {
 function chooseRepairCandidates(candidates, maxItems = 3) {
   return candidates
     .filter((candidate) => {
-      if (!candidate.alphaId) return false;
+      if (!candidate.alphaId && !candidate.expression) return false;
       const gate = evaluateCandidateGate(candidate);
       if (gate.ok) return false;
       // Repair when 1-2 BRAIN checks failed; 3+ failures indicate fundamentally broken alpha
@@ -2490,6 +2494,12 @@ async function visibleRunDirs(runIds, authContext) {
     if (canAccessOwner(authContext, meta.ownerId ?? "default")) visible.push(runId);
   }
   return visible;
+}
+
+function simpleHash(str) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) { h = Math.imul(h ^ str.charCodeAt(i), 0x01000193) >>> 0; }
+  return h.toString(16).padStart(8, "0");
 }
 
 function sanitizeRunId(value) {
