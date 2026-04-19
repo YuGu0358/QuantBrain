@@ -17,7 +17,6 @@ COPY service ./service
 COPY docs ./docs
 
 ENV PORT=3000
-ENV RUNS_DIR=/app/cloud-runs
 ENV ALPHA_MINER_ENGINE=python-v2
 
 RUN mkdir -p /app/cloud-runs

@@ -2678,8 +2678,7 @@ async function readRunProgressStats(outputDir) {
       if (!e) continue;
       if (e.stage === "evaluated") nSim++;
       if (e.stage === "rejected") nGen++;
-      // Build human-readable log line for dashboard
-      const at = e.at ? String(e.at).slice(11, 19) : "";
+      // Build log entry: keep raw ISO timestamp so browser can format in local timezone
       let msg = "";
       if (e.stage === "started") msg = `启动 mode=${e.mode ?? ""} engine=python-v2`;
       else if (e.stage === "submitted") msg = `提交仿真 ${e.expression ? e.expression.slice(0, 60) : ""}`;
@@ -2695,7 +2694,8 @@ async function readRunProgressStats(outputDir) {
       else if (e.stage === "waiting") msg = `⏳ 等待配额: ${e.reason ?? ""}`;
       else if (e.stage === "finished") msg = `完成 gen=${e.summary?.generatedCandidates ?? 0} sim=${e.summary?.total_brain_simulations ?? 0}`;
       else msg = `${e.stage}`;
-      if (msg) recentEvents.push(`${at} ${msg}`);
+      // Push {ts, msg} so the browser formats time in its local timezone
+      if (msg) recentEvents.push({ ts: e.at || null, msg });
     }
     nGen += nSim; // total generated = simulated + rejected
     // pick up qualified count from pool.json if already written
@@ -3582,6 +3582,18 @@ body{display:flex}
   fetchSched();
   setInterval(fetchSched, 30000);
 
+  // Format a progress event {ts, msg} or legacy string into a display line
+  // Uses browser local timezone so timestamps match the user's clock
+  function fmtEvent(ev) {
+    if (!ev) return '';
+    if (typeof ev === 'string') return ev;
+    var t = '';
+    if (ev.ts) {
+      try { t = new Date(ev.ts).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false}); } catch(e) { t = String(ev.ts).slice(11,19); }
+    }
+    return t ? t + ' ' + (ev.msg || '') : (ev.msg || '');
+  }
+
   // Update mining status banner
   function updateMiningBanner(activeRun) {
     var banner = $('mining-banner');
@@ -3723,7 +3735,7 @@ body{display:flex}
       var ctDot2 = $('ct-dot'); var ctText2 = $('ct-text');
       var taskDisplayLine = lastLogLine;
       if (activeRun && activeRun.engine === 'python-v2' && activeRun.progressStats && activeRun.progressStats.recentEvents && activeRun.progressStats.recentEvents.length) {
-        taskDisplayLine = activeRun.progressStats.recentEvents[activeRun.progressStats.recentEvents.length - 1] || lastLogLine;
+        taskDisplayLine = fmtEvent(activeRun.progressStats.recentEvents[activeRun.progressStats.recentEvents.length - 1]) || lastLogLine;
       }
       if (activeRun && taskDisplayLine) {
         if (ctDot2) ctDot2.className = 'ct-dot running';
@@ -3871,7 +3883,7 @@ body{display:flex}
             ? progressEvents
             : runLogs.slice(-60).map(function(l){ return (l.at ? l.at.slice(11,19) : '') + ' ' + (l.line || ''); });
           if (!logLines.length && progressEvents && progressEvents.length) logLines = progressEvents;
-          pl.textContent = logLines.join('\\n') || '暂无进度数据';
+          pl.textContent = logLines.map(fmtEvent).join('\\n') || '暂无进度数据';
         }
       }
 

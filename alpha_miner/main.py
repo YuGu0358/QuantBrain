@@ -472,6 +472,14 @@ def main() -> None:
             router.save_state(global_state_path)
         except Exception:
             pass
+    # Embed any new KB examples added during this run (batch, non-blocking on failure)
+    if kb_embedder is not None:
+        try:
+            n_new = kb.backfill_embeddings()
+            if n_new:
+                print(f"[kb] embedded {n_new} new examples after run", flush=True)
+        except Exception as _emb_e:
+            print(f"[kb] post-run embedding skipped: {_emb_e}", flush=True)
     append_jsonl(progress_path, {"at": _ts(), "stage": "finished", "summary": summary})
     print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
 
@@ -642,7 +650,7 @@ def _kb_write_back(kb, category, candidate, result, accepted: bool) -> None:
         else:
             reason = "FAILED_GATE"
             suggested_fix = "Check orthogonality or DSR; try different operator structure"
-        if reason in ("LOW_FITNESS", "LOW_SHARPE"):
+        if reason in ("LOW_FITNESS_HIGH_TURNOVER", "LOW_FITNESS_WEAK_SIGNAL", "LOW_SHARPE"):
             kb.upsert_example(
                 item_id=f"fail_{candidate.id}",
                 expression=candidate.expression,
