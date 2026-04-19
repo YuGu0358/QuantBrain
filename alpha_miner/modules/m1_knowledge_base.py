@@ -149,11 +149,21 @@ class KnowledgeBase:
                 embedding_json = row[0]  # keep existing vector
             else:
                 text = f"{category} {expression} {hypothesis or ''}"
-                try:
-                    vec = self.embedder.embed_query(text)
-                    embedding_json = json.dumps(vec)
-                except Exception as exc:
-                    print(f"[kb] embedding failed for {item_id}: {exc}", flush=True)
+                _max_tries = 3
+                for _attempt in range(_max_tries):
+                    try:
+                        vec = self.embedder.embed_query(text)
+                        embedding_json = json.dumps(vec)
+                        break
+                    except Exception as exc:
+                        _msg = str(exc)
+                        if "429" in _msg and _attempt < _max_tries - 1:
+                            import time as _time
+                            _time.sleep(2 ** _attempt)  # 1s, 2s backoff
+                        else:
+                            if "429" not in _msg:
+                                print(f"[kb] embedding failed for {item_id}: {exc}", flush=True)
+                            break  # skip embedding, store without vector
 
         with sqlite3.connect(self.db_path) as db:
             db.execute(
