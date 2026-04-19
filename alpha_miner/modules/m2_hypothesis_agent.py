@@ -348,8 +348,10 @@ class HypothesisAgent:
             raise NotImplementedError("No router")
         import time as _time
         role = request_payload.get("_llm_role", "generate")
-        _max_tries = 3
-        _backoff = [5, 15]  # seconds between retries on 429
+        _max_tries = 4
+        # 429 = rate-limited (short wait); 529 = Anthropic overloaded (longer wait)
+        _backoff_429 = [5, 15, 30]
+        _backoff_529 = [20, 45, 90]
         for _attempt in range(_max_tries):
             try:
                 provider = request_payload.get("_provider") or self.router.pick(role)
@@ -366,13 +368,19 @@ class HypothesisAgent:
                 return {"candidates": candidates}
             except Exception as exc:
                 _msg = str(exc)
-                if "429" in _msg and _attempt < _max_tries - 1:
-                    _wait = _backoff[_attempt]
-                    print(f"[llm] {role} rate-limited (429), retry {_attempt+1}/{_max_tries-1} in {_wait}s", flush=True)
-                    _time.sleep(_wait)
-                else:
-                    print(f"[llm] {role} call failed: {exc}. raw[:200]={locals().get('raw','')[:200]!r}", flush=True)
-                    break
+                if _attempt < _max_tries - 1:
+                    if "529" in _msg:
+                        _wait = _backoff_529[_attempt]
+                        print(f"[llm] {role} overloaded (529), retry {_attempt+1}/{_max_tries-1} in {_wait}s", flush=True)
+                        _time.sleep(_wait)
+                        continue
+                    if "429" in _msg:
+                        _wait = _backoff_429[_attempt]
+                        print(f"[llm] {role} rate-limited (429), retry {_attempt+1}/{_max_tries-1} in {_wait}s", flush=True)
+                        _time.sleep(_wait)
+                        continue
+                print(f"[llm] {role} call failed: {exc}. raw[:200]={locals().get('raw','')[:200]!r}", flush=True)
+                break
         if request_payload.get("response_format") == "strict_json_selected_indices_v1":
             return {"selected_indices": []}
         return {"candidates": []}
