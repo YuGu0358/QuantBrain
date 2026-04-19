@@ -165,6 +165,12 @@ class BrainBacktester:
         alpha_test = (alpha_payload.get("test") or {}) if isinstance(alpha_payload, dict) else {}
         test_sharpe = safe_float(alpha_test.get("sharpe"))
         _poll_status = poll_payload.get("status") if isinstance(poll_payload, dict) else None
+        _poll_msg = (
+            poll_payload.get("message") or poll_payload.get("error") or poll_payload.get("detail")
+            if isinstance(poll_payload, dict) else None
+        )
+        if _poll_status and _poll_status not in ("complete", "COMPLETE"):
+            print(f"[brain] poll_status={_poll_status} expr={expression[:80]} msg={_poll_msg}", flush=True)
         append_jsonl(
             self.progress_path,
             {
@@ -173,6 +179,7 @@ class BrainBacktester:
                 "period": period,
                 "alpha_id": alpha_id,
                 "poll_status": _poll_status,
+                "poll_msg": _poll_msg,
                 "has_daily_pnl": bool(series_path),
                 "sharpe": sharpe,
                 "fitness": fitness,
