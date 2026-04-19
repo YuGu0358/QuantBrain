@@ -4,6 +4,7 @@ import base64
 import json
 import math
 import os
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -54,21 +55,26 @@ class RateLimiter:
         self.minute_events: list[float] = []
         self.day_count = 0
         self.day_epoch = time.strftime("%Y-%m-%d")
+        self._lock = threading.Lock()
 
     def wait(self) -> None:
-        today = time.strftime("%Y-%m-%d")
-        if today != self.day_epoch:
-            self.day_epoch = today
-            self.day_count = 0
-        if self.day_count >= self.max_per_day:
-            raise QuotaWaiting("Daily BRAIN simulation quota exhausted.")
-        now = time.time()
-        self.minute_events = [event for event in self.minute_events if now - event < 60]
-        if len(self.minute_events) >= self.max_per_minute:
-            sleep_for = 60 - (now - self.minute_events[0])
-            time.sleep(max(0.0, sleep_for))
-        self.minute_events.append(time.time())
-        self.day_count += 1
+        """Thread-safe rate limiter: sleep outside the lock to avoid blocking other threads."""
+        while True:
+            with self._lock:
+                today = time.strftime("%Y-%m-%d")
+                if today != self.day_epoch:
+                    self.day_epoch = today
+                    self.day_count = 0
+                if self.day_count >= self.max_per_day:
+                    raise QuotaWaiting("Daily BRAIN simulation quota exhausted.")
+                now = time.time()
+                self.minute_events = [e for e in self.minute_events if now - e < 60]
+                if len(self.minute_events) < self.max_per_minute:
+                    self.minute_events.append(time.time())
+                    self.day_count += 1
+                    return
+                sleep_for = 60 - (now - self.minute_events[0])
+            time.sleep(max(0.1, sleep_for))
 
 
 class BrainBacktester:

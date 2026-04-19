@@ -5,6 +5,7 @@ import json
 import os
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -233,12 +234,39 @@ def main() -> None:
     if blocked_reason:
         append_jsonl(progress_path, {"at": _ts(), "stage": "blocked", "reason": blocked_reason})
     elif args.mode in {"evaluate", "loop"}:
-        for candidate in valid_candidates:
+        # --- parallel BRAIN submission -----------------------------------
+        # All candidates are submitted concurrently; the thread-safe RateLimiter
+        # enforces the 8/min ceiling. Results are collected in original order and
+        # then processed sequentially so shared state (alpha_pool, etc.) stays safe.
+        _quota_hit: bool = False
+
+        def _submit_one(_idx_cand: tuple) -> tuple:
+            _i, _cand = _idx_cand
             try:
-                result = backtester.submit_alpha(candidate.expression, period="IS", settings=sim_settings or None)
-            except QuotaWaiting as error:
-                append_jsonl(progress_path, {"at": _ts(), "stage": "waiting", "reason": str(error)})
-                break
+                _res = backtester.submit_alpha(_cand.expression, period="IS", settings=sim_settings or None)
+                return _i, _cand, _res, None
+            except QuotaWaiting as _e:
+                return _i, _cand, None, _e
+
+        _n_workers = min(len(valid_candidates), 8)
+        _backtest_pairs: list = [None] * len(valid_candidates)
+        if valid_candidates:
+            with ThreadPoolExecutor(max_workers=_n_workers) as _pool:
+                _futs = [_pool.submit(_submit_one, (i, c)) for i, c in enumerate(valid_candidates)]
+                for _fut in as_completed(_futs):
+                    _i, _cand, _res, _err = _fut.result()
+                    if _err is not None:
+                        if not _quota_hit:
+                            append_jsonl(progress_path, {"at": _ts(), "stage": "waiting", "reason": str(_err)})
+                        _quota_hit = True
+                    else:
+                        _backtest_pairs[_i] = (_cand, _res)
+
+        # --- sequential result processing --------------------------------
+        for _pair in _backtest_pairs:
+            if _pair is None:
+                continue  # slot was quota-hit or not submitted
+            candidate, result = _pair
             record = {"candidate": asdict(candidate), "backtest": asdict(result)}
             if result.pnl_path:
                 pnl = load_pnl_series(Path(result.pnl_path))
@@ -275,10 +303,6 @@ def main() -> None:
                     except QuotaWaiting as error:
                         append_jsonl(progress_path, {"at": _ts(), "stage": "waiting", "reason": str(error), "alpha_id": result.alpha_id})
                         record["brainCheckOrthogonality"] = {"status": "waiting", "reason": str(error)}
-                # Degraded gate: composite score replaces the three separate boolean flags.
-                # Accepts alphas where case_c_robust_score >= 0.20 so the repair loop has
-                # candidates to work on. IS sharpe dominates (0.60 weight); fitness and
-                # turnover provide secondary signal; test_sharpe rewards IS→OOS consistency.
                 c_score, c_qualified = case_c_robust_score(
                     sharpe=result.sharpe,
                     fitness=result.fitness,
@@ -298,6 +322,7 @@ def main() -> None:
                 append_jsonl(
                     progress_path,
                     {
+                        "at": _ts(),
                         "stage": "degraded_evaluation",
                         "candidate_id": candidate.id,
                         "alpha_id": result.alpha_id,

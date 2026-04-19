@@ -4021,7 +4021,7 @@ body{display:flex}
     } catch(e) {}
   }
   poll();
-  setInterval(poll, 10000);
+  setInterval(poll, 3000);
 
   // Settings
   var settingsLoaded = false;
