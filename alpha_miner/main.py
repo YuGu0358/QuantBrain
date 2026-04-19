@@ -77,12 +77,19 @@ def main() -> None:
         if state_file.exists():
             router = LLMRouter.load_state(state_file)
             router._state_path = state_file
-            # Merge yaml providers missing from loaded state (fixes newly-added providers like claude_repair)
+            # Sync with current yaml: add new providers, remove deleted ones.
+            # This prevents stale providers (e.g. gpt45_generate) from being
+            # picked by the bandit after a provider rename/removal.
             _yaml_router = LLMRouter.from_yaml()
             for _key, _prov in _yaml_router._providers.items():
                 if _key not in router._providers:
                     router._providers[_key] = _prov
                     router._providers_by_role.setdefault(_prov.role, []).append(_prov)
+            for _key in list(router._providers.keys()):
+                if _key not in _yaml_router._providers:
+                    _stale = router._providers.pop(_key)
+                    _role_list = router._providers_by_role.get(_stale.role, [])
+                    router._providers_by_role[_stale.role] = [p for p in _role_list if p.name != _stale.name]
         router.daily_budget_usd = float(os.environ.get("LLM_BUDGET_DAILY_USD", "3.60"))
     agent = HypothesisAgent(
         kb=kb,
