@@ -312,6 +312,45 @@ const server = createServer(async (req, res) => {
       return sendJson(res, result.submitted ? 200 : 422, result);
     }
 
+    // Retroactively process all completed run dirs and try to auto-submit candidates
+    // that pass the gate. Useful after server restarts or gate-logic fixes.
+    if (req.method === "POST" && url.pathname === "/runs/reprocess") {
+      const body = await readJson(req);
+      const dryRun = body?.dryRun === true;
+      const ownerId = authContext.userId;
+      const dirs = await listRunDirs(RUNS_DIR);
+      const results = [];
+      for (const dir of dirs) {
+        const pool = await maybeReadJson(path.join(dir, "pool.json"));
+        if (!pool?.records) continue;
+        const candidates = pool.records
+          .filter((r) => r.backtest != null)
+          .map((r) => normalizePythonV2Candidate(r));
+        for (const candidate of candidates) {
+          if (!candidate.alphaId || candidate.alphaId.startsWith("expr-")) continue;
+          const gate = evaluateCandidateGate(candidate);
+          const entry = { alphaId: candidate.alphaId, gate: gate.ok, reasons: gate.reasons, dir };
+          if (gate.ok && !dryRun) {
+            try {
+              const sub = await submitAlpha(candidate.alphaId, {
+                force: false,
+                queueRepairOnGateFailure: false,
+                source: "reprocess",
+                ownerId,
+              });
+              entry.submitted = sub.submitted;
+              entry.submitReasons = sub.gate?.reasons ?? [];
+            } catch (err) {
+              entry.submitted = false;
+              entry.error = err instanceof Error ? err.message : String(err);
+            }
+          }
+          results.push(entry);
+        }
+      }
+      return sendJson(res, 200, { dryRun, processed: results.length, results });
+    }
+
     const runMatch = url.pathname.match(/^\/runs\/([^/]+)$/);
     if (req.method === "GET" && runMatch) {
       const runId = sanitizeRunId(decodeURIComponent(runMatch[1]));
@@ -1817,13 +1856,23 @@ function evaluateCandidateGate(candidate) {
   const checks = candidate.checks ?? [];
   const nonPassChecks = checks.filter((check) => check.result !== "PASS");
   const testSharpe = toNumber(candidate.metrics?.testSharpe);
+  const isSharpe = toNumber(candidate.metrics?.isSharpe);
   const reasons = [];
   if (checks.length === 0) reasons.push("No IS submission checks are available yet.");
   if (nonPassChecks.length > 0) {
     reasons.push(`Checks not all PASS: ${nonPassChecks.map((check) => `${check.name}:${check.result}`).join(", ")}.`);
   }
-  if (!Number.isFinite(testSharpe) || testSharpe <= 0) {
-    reasons.push(`testSharpe must be positive, got ${Number.isFinite(testSharpe) ? testSharpe : "missing"}.`);
+  // Mirror evaluateSubmissionGate: when testSharpe is available require it to be positive;
+  // when it is missing (degraded/regular-tier) fall back to IS Sharpe >= 0.5 so candidates
+  // are not permanently blocked from auto-submission.
+  if (Number.isFinite(testSharpe)) {
+    if (testSharpe <= 0) {
+      reasons.push(`testSharpe must be positive, got ${testSharpe}.`);
+    }
+  } else {
+    if (!Number.isFinite(isSharpe) || isSharpe < 0.5) {
+      reasons.push(`Degraded mode: IS Sharpe must be >= 0.5, got ${Number.isFinite(isSharpe) ? isSharpe.toFixed(3) : "missing"}.`);
+    }
   }
   return {
     ok: reasons.length === 0,
@@ -1832,6 +1881,7 @@ function evaluateCandidateGate(candidate) {
     status: "UNSUBMITTED",
     stage: candidate.stage ?? "IS",
     testSharpe: Number.isFinite(testSharpe) ? testSharpe : null,
+    isSharpe: Number.isFinite(isSharpe) ? isSharpe : null,
     checks: checks.map((check) => ({
       name: check.name,
       result: check.result,
