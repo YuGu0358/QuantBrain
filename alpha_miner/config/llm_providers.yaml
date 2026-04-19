@@ -1,13 +1,13 @@
 providers:
   # --- GENERATION ---
-  gpt45_generate:
+  claude_sonnet_generate:
     role: generate
-    model_id: gpt-5.4-2026-03-05
+    model_id: claude-sonnet-4-6
     api_base: null
-    api_key_env: OPENAI_API_KEY
-    client_type: openai_compat
-    cost_per_1k_input: 0.075
-    cost_per_1k_output: 0.150
+    api_key_env: ANTHROPIC_API_KEY
+    client_type: anthropic
+    cost_per_1k_input: 0.003
+    cost_per_1k_output: 0.015
     weight_initial: 1.0
 
   # --- REPAIR (RepairChain uses Claude directly; this entry records outcomes for dashboard) ---
@@ -24,32 +24,32 @@ providers:
   # --- JUDGE ---
   claude_opus_judge:
     role: judge
-    model_id: claude-opus-4-7
+    model_id: claude-opus-4-6
     api_base: null
     api_key_env: ANTHROPIC_API_KEY
     client_type: anthropic
-    cost_per_1k_input: 0.015
-    cost_per_1k_output: 0.075
+    cost_per_1k_input: 0.005
+    cost_per_1k_output: 0.025
     weight_initial: 1.0
 
   # --- DISTILL ---
   claude_opus_distill:
     role: distill
-    model_id: claude-opus-4-7
+    model_id: claude-opus-4-6
     api_base: null
     api_key_env: ANTHROPIC_API_KEY
     client_type: anthropic
-    cost_per_1k_input: 0.015
-    cost_per_1k_output: 0.075
+    cost_per_1k_input: 0.005
+    cost_per_1k_output: 0.025
     weight_initial: 1.0
 
   # --- IDEA ---
   claude_opus_idea:
     role: idea
-    model_id: claude-opus-4-7
+    model_id: claude-opus-4-6
     api_base: null
     api_key_env: ANTHROPIC_API_KEY
     client_type: anthropic
-    cost_per_1k_input: 0.015
-    cost_per_1k_output: 0.075
+    cost_per_1k_input: 0.005
+    cost_per_1k_output: 0.025
     weight_initial: 1.0

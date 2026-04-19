@@ -240,16 +240,12 @@ class RepairChain:
         api_key: str = "",
         model_id: str = "claude-opus-4-6",
         temperature: float = 0.7,
-        openai_api_key: str = "",
-        # Legacy positional alias kept for backward compat
         **kwargs: Any,
     ):
         self.memory = memory
         self._model_id = model_id
-        self._api_key = api_key or kwargs.get("openai_api_key", "")
-        self._openai_key = openai_api_key or self._api_key
+        self._api_key = api_key
         self._temperature = temperature
-        self._embeddings = None
 
     @property
     def _is_claude(self) -> bool:
@@ -262,12 +258,7 @@ class RepairChain:
         project = os.environ.get("LANGCHAIN_PROJECT", "(not set)")
         print(f"[repair_agent] initializing model={self._model_id} langsmith_tracing={tracing} project={project}", flush=True)
 
-        from langchain_openai import OpenAIEmbeddings
-
-        if self._embeddings is None and self._openai_key:
-            self._embeddings = OpenAIEmbeddings(api_key=self._openai_key, model="text-embedding-3-small")
-
-        tools = build_tools(self.memory, self._embeddings, validator)
+        tools = build_tools(self.memory, None, validator)
         tool_map = {t.name: t for t in tools}
 
         if self._is_claude:
@@ -384,8 +375,6 @@ class RepairChain:
             "forbidden_directions": fix_list if not accepted else [],
             "family_tag": "",
         })
-        # Reset embeddings so FAISS index rebuilds on next call
-        self._embeddings = None
 
 
 # ---------------------------------------------------------------------------

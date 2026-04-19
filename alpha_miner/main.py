@@ -54,16 +54,7 @@ def main() -> None:
     # KB and AlphaPool use shared paths under RUNS_DIR so knowledge accumulates
     # across runs. Per-run output_dir is only for ephemeral artefacts (snapshots, logs).
     shared_dir = output_dir.parent
-    kb_embedder = None
-    _openai_key = os.environ.get("OPENAI_API_KEY", "")
-    if _openai_key:
-        try:
-            from langchain_openai import OpenAIEmbeddings
-            kb_embedder = OpenAIEmbeddings(api_key=_openai_key, model="text-embedding-3-small")
-            print("[kb] embedder initialized (text-embedding-3-small)", flush=True)
-        except Exception as _emb_exc:
-            print(f"[kb] embedder unavailable, falling back to SQL search: {_emb_exc}", flush=True)
-    kb = KnowledgeBase(shared_dir / "knowledge_base.db", embedder=kb_embedder)
+    kb = KnowledgeBase(shared_dir / "knowledge_base.db", embedder=None)
     kb.import_wq101_negative_examples(PACKAGE_ROOT / "seeds" / "wq101_alphas.json")
     _import_submitted_feedback(kb, shared_dir / "submitted_alphas.jsonl")
     cache = LLMCache(output_dir / "llm_cache")
@@ -88,7 +79,7 @@ def main() -> None:
         kb=kb,
         cache=cache,
         taxonomy=taxonomy,
-        model=os.environ.get("OPENAI_IDEA_MODEL", "gpt-4o-mini"),
+        model="claude-sonnet-4-6",
         temperature=float(generation_cfg.get("temperature", 0.4)),
         top_p=float(generation_cfg.get("top_p", 0.9)),
         max_tokens=int(generation_cfg.get("max_tokens", 2000)),
@@ -140,15 +131,11 @@ def main() -> None:
         repair_memory = RepairMemory(repair_memory_path)
         agent.repair_memory = repair_memory
         # LangChain repair chain (primary path) — defaults to Claude opus-4-6
-        anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
-        openai_key = os.environ.get("OPENAI_API_KEY", "")
         repair_model = os.environ.get("REPAIR_MODEL", "claude-opus-4-6")
-        repair_api_key = anthropic_key if repair_model.startswith("claude") else openai_key
         agent.repair_chain = RepairChain(
             memory=repair_memory,
-            api_key=repair_api_key,
+            api_key=os.environ.get("ANTHROPIC_API_KEY", ""),
             model_id=repair_model,
-            openai_api_key=openai_key,  # always passed for embeddings
         )
         # Legacy fallback (kept for compatibility)
         agent.retriever = Retriever(memory=repair_memory, router=router)
