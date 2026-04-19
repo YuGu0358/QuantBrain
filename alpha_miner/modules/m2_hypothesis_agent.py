@@ -346,25 +346,36 @@ class HypothesisAgent:
     def _call_llm(self, request_payload: dict[str, Any]) -> dict[str, Any]:
         if self.router is None:
             raise NotImplementedError("No router")
+        import time as _time
         role = request_payload.get("_llm_role", "generate")
-        try:
-            provider = request_payload.get("_provider") or self.router.pick(role)
-            raw, ti, to, latency = self._call_provider(provider, request_payload)
-            if request_payload.get("response_format") == "strict_json_selected_indices_v1":
-                selected_indices = self._extract_json(raw).get("selected_indices", []) if raw else []
-                self.router.record_result(provider.name, role, len(selected_indices) > 0, latency, ti, to)
-                return {"selected_indices": selected_indices}
-            parsed = self._extract_json(raw) if raw else {}
-            candidates = parsed.get("candidates", [])
-            self.router.record_result(provider.name, role, len(candidates) > 0, latency, ti, to)
-            if not candidates:
-                print(f"[llm] {provider.name}/{role} returned 0 candidates. raw[:200]={raw[:200]!r}", flush=True)
-            return {"candidates": candidates}
-        except Exception as exc:
-            print(f"[llm] {role} call failed: {exc}. raw[:200]={locals().get('raw','')[:200]!r}", flush=True)
-            if request_payload.get("response_format") == "strict_json_selected_indices_v1":
-                return {"selected_indices": []}
-            return {"candidates": []}
+        _max_tries = 3
+        _backoff = [5, 15]  # seconds between retries on 429
+        for _attempt in range(_max_tries):
+            try:
+                provider = request_payload.get("_provider") or self.router.pick(role)
+                raw, ti, to, latency = self._call_provider(provider, request_payload)
+                if request_payload.get("response_format") == "strict_json_selected_indices_v1":
+                    selected_indices = self._extract_json(raw).get("selected_indices", []) if raw else []
+                    self.router.record_result(provider.name, role, len(selected_indices) > 0, latency, ti, to)
+                    return {"selected_indices": selected_indices}
+                parsed = self._extract_json(raw) if raw else {}
+                candidates = parsed.get("candidates", [])
+                self.router.record_result(provider.name, role, len(candidates) > 0, latency, ti, to)
+                if not candidates:
+                    print(f"[llm] {provider.name}/{role} returned 0 candidates. raw[:200]={raw[:200]!r}", flush=True)
+                return {"candidates": candidates}
+            except Exception as exc:
+                _msg = str(exc)
+                if "429" in _msg and _attempt < _max_tries - 1:
+                    _wait = _backoff[_attempt]
+                    print(f"[llm] {role} rate-limited (429), retry {_attempt+1}/{_max_tries-1} in {_wait}s", flush=True)
+                    _time.sleep(_wait)
+                else:
+                    print(f"[llm] {role} call failed: {exc}. raw[:200]={locals().get('raw','')[:200]!r}", flush=True)
+                    break
+        if request_payload.get("response_format") == "strict_json_selected_indices_v1":
+            return {"selected_indices": []}
+        return {"candidates": []}
 
     def _judge_candidates(self, candidates: list[Candidate], n: int, router) -> list[Candidate]:
         if not router or len(candidates) <= n:
