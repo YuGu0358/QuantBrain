@@ -124,9 +124,6 @@ class KnowledgeBase:
                 metadata=seed,
             )
             count += 1
-        # Batch-embed any seeds that landed without an embedding
-        if self.embedder is not None:
-            self.backfill_embeddings()
         return count
 
     def upsert_example(
