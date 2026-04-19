@@ -2682,7 +2682,10 @@ async function readRunProgressStats(outputDir) {
       let msg = "";
       if (e.stage === "started") msg = `启动 mode=${e.mode ?? ""} engine=python-v2`;
       else if (e.stage === "submitted") msg = `提交仿真 ${e.expression ? e.expression.slice(0, 60) : ""}`;
-      else if (e.stage === "backtest_completed") msg = `回测完成 alpha_id=${e.alpha_id ?? "?"} sharpe=${e.sharpe ?? "?"}`;
+      else if (e.stage === "backtest_completed") {
+        const ps = e.poll_status && e.poll_status !== "complete" ? ` [${e.poll_status}]` : "";
+        msg = `回测完成 alpha_id=${e.alpha_id ?? "??"} sharpe=${e.sharpe ?? "??"}${ps}`;
+      }
       else if (e.stage === "mock_backtest") msg = `模拟回测 sharpe=${e.sharpe ?? "?"}`;
       else if (e.stage === "evaluated") msg = `已评估 ${e.candidate_id ?? ""} status=${e.status ?? ""}`;
       else if (e.stage === "degraded_evaluation") {

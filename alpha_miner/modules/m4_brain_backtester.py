@@ -9,6 +9,7 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -91,6 +92,7 @@ class BrainBacktester:
         self.correlation_threshold = float(config.get("pool", {}).get("brain_check_correlation_threshold", 0.7))
         self._cookie: str | None = None
         self._cookie_expires_at = 0.0
+        self._auth_lock = threading.Lock()  # prevents concurrent re-authentication
         self.progress_path = output_dir / "progress.jsonl"
         self.snapshot_dir = output_dir / "backtest_snapshots"
         self.pnl_dir = output_dir / "pnl_series"
@@ -122,7 +124,7 @@ class BrainBacktester:
             "regular": expression,
         }
         snapshot_path = self.snapshot_dir / f"{sha256_json({'expression': expression, 'period': period, 'settings': payload['settings']})}.json"
-        append_jsonl(self.progress_path, {"stage": "submitted", "period": period, "expression": expression})
+        append_jsonl(self.progress_path, {"at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "stage": "submitted", "period": period, "expression": expression})
         status, headers, response_body = self._request_json("POST", "/simulations", cookie, payload=payload, timeout=60)
         simulation_id = extract_simulation_id(headers.get("Location"))
         snapshot = {
@@ -162,12 +164,15 @@ class BrainBacktester:
         # OOS (test period) Sharpe — BRAIN exposes alpha.test.sharpe separately from IS
         alpha_test = (alpha_payload.get("test") or {}) if isinstance(alpha_payload, dict) else {}
         test_sharpe = safe_float(alpha_test.get("sharpe"))
+        _poll_status = poll_payload.get("status") if isinstance(poll_payload, dict) else None
         append_jsonl(
             self.progress_path,
             {
+                "at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "stage": "backtest_completed",
                 "period": period,
                 "alpha_id": alpha_id,
+                "poll_status": _poll_status,
                 "has_daily_pnl": bool(series_path),
                 "sharpe": sharpe,
                 "fitness": fitness,
@@ -221,27 +226,34 @@ class BrainBacktester:
         return BrainCheckResult(alpha_id, "completed" if status < 400 else f"failed_http_{status}", passed, max_corr, str(raw_path))
 
     def _authenticate(self) -> str:
+        # Fast path: valid cookie already cached (no lock needed for read)
         if self._cookie and time.time() < self._cookie_expires_at:
             return self._cookie
-        raw = f"{os.environ['WQB_EMAIL']}:{os.environ['WQB_PASSWORD']}".encode("utf-8")
-        auth = base64.b64encode(raw).decode("ascii")
-        request = urllib.request.Request(
-            f"{API_ROOT}/authentication",
-            data=b"{}",
-            method="POST",
-            headers={
-                "Accept": "application/json;version=2.0",
-                "Authorization": f"Basic {auth}",
-                "Content-Type": "application/json",
-                "Origin": "https://platform.worldquantbrain.com",
-                "Referer": "https://platform.worldquantbrain.com/",
-            },
-        )
-        with urllib.request.urlopen(request, timeout=30) as response:
-            cookies = response.headers.get_all("Set-Cookie", [])
-        self._cookie = "; ".join(cookie.split(";", 1)[0] for cookie in cookies)
-        self._cookie_expires_at = time.time() + 23 * 60 * 60
-        return self._cookie
+        # Slow path: re-authenticate under lock so concurrent threads don't
+        # each fire their own login request (BRAIN may invalidate prior sessions).
+        with self._auth_lock:
+            # Re-check inside the lock — another thread may have refreshed already
+            if self._cookie and time.time() < self._cookie_expires_at:
+                return self._cookie
+            raw = f"{os.environ['WQB_EMAIL']}:{os.environ['WQB_PASSWORD']}".encode("utf-8")
+            auth = base64.b64encode(raw).decode("ascii")
+            request = urllib.request.Request(
+                f"{API_ROOT}/authentication",
+                data=b"{}",
+                method="POST",
+                headers={
+                    "Accept": "application/json;version=2.0",
+                    "Authorization": f"Basic {auth}",
+                    "Content-Type": "application/json",
+                    "Origin": "https://platform.worldquantbrain.com",
+                    "Referer": "https://platform.worldquantbrain.com/",
+                },
+            )
+            with urllib.request.urlopen(request, timeout=30) as response:
+                cookies = response.headers.get_all("Set-Cookie", [])
+            self._cookie = "; ".join(cookie.split(";", 1)[0] for cookie in cookies)
+            self._cookie_expires_at = time.time() + 23 * 60 * 60
+            return self._cookie
 
     def _request_json(
         self,
