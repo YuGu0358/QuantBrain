@@ -138,7 +138,8 @@ class KnowledgeBase:
         is_negative_example: bool,
         metadata: dict[str, Any] | None = None,
     ) -> None:
-        # Check if an embedding already exists so we don't re-compute it
+        # Keep existing embedding if present; do NOT embed on upsert —
+        # backfill_embeddings() handles new items in batch after all imports finish.
         embedding_json: str | None = None
         if self.embedder is not None:
             with sqlite3.connect(self.db_path) as db:
@@ -147,23 +148,6 @@ class KnowledgeBase:
                 ).fetchone()
             if row and row[0]:
                 embedding_json = row[0]  # keep existing vector
-            else:
-                text = f"{category} {expression} {hypothesis or ''}"
-                _max_tries = 3
-                for _attempt in range(_max_tries):
-                    try:
-                        vec = self.embedder.embed_query(text)
-                        embedding_json = json.dumps(vec)
-                        break
-                    except Exception as exc:
-                        _msg = str(exc)
-                        if "429" in _msg and _attempt < _max_tries - 1:
-                            import time as _time
-                            _time.sleep(2 ** _attempt)  # 1s, 2s backoff
-                        else:
-                            if "429" not in _msg:
-                                print(f"[kb] embedding failed for {item_id}: {exc}", flush=True)
-                            break  # skip embedding, store without vector
 
         with sqlite3.connect(self.db_path) as db:
             db.execute(

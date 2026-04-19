@@ -66,6 +66,14 @@ def main() -> None:
     kb = KnowledgeBase(shared_dir / "knowledge_base.db", embedder=kb_embedder)
     kb.import_wq101_negative_examples(PACKAGE_ROOT / "seeds" / "wq101_alphas.json")
     _import_submitted_feedback(kb, shared_dir / "submitted_alphas.jsonl")
+    # Batch-embed all items missing vectors in one shot (avoids per-item 429 on startup)
+    if kb_embedder is not None:
+        try:
+            n_backfill = kb.backfill_embeddings()
+            if n_backfill:
+                print(f"[kb] backfilled {n_backfill} embeddings", flush=True)
+        except Exception as _bf_exc:
+            print(f"[kb] backfill skipped: {_bf_exc}", flush=True)
     cache = LLMCache(output_dir / "llm_cache")
     taxonomy = load_taxonomy()
     router = None
