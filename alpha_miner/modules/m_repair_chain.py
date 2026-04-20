@@ -180,7 +180,7 @@ def build_tools(memory: RepairMemory, embeddings: Any, validator: Any) -> list:
             return "VALID (validator not available)"
         try:
             result = validator.validate(expression)
-            if result.valid:
+            if result.is_valid:
                 return "VALID"
             return f"INVALID: {'; '.join(result.errors)}"
         except Exception as exc:
@@ -273,6 +273,7 @@ class RepairChain:
             llm_kwargs: dict[str, Any] = {
                 "api_key": self._api_key,
                 "model": self._model_id,
+                "max_tokens": 4096,  # required when using bind_tools with Anthropic API
             }
             if not self._model_id.startswith(("claude-opus-4", "claude-sonnet-4")):
                 llm_kwargs["temperature"] = self._temperature
