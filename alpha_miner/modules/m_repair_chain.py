@@ -121,14 +121,14 @@ def build_tools(memory: RepairMemory, embeddings: Any, validator: Any) -> list:
             return json.dumps({"error": str(exc), "primary_symptom": "low_sharpe", "repair_strategy": "extend lookback and add neutralization"})
 
     @tool
-    def retrieve_repair_memory(expression: str, symptoms: str, k: int = 5) -> str:
+    def retrieve_repair_memory(expression: str, symptoms: str) -> str:
         """Search historical repair cases semantically similar to the current failing expression.
         Args:
             expression: The failing expression to search similar cases for
             symptoms: Comma-separated symptom names (e.g. 'low_sharpe,low_fitness')
-            k: Number of similar cases to retrieve
         Returns formatted list of past successful and failed repairs.
         """
+        k = 5
         try:
             records = memory.get_recent(limit=500)
             if not records:
@@ -187,13 +187,12 @@ def build_tools(memory: RepairMemory, embeddings: Any, validator: Any) -> list:
             return f"INVALID: {exc}"
 
     @tool
-    def generate_repair_variants(expression: str, diagnosis_json: str, memory_context: str, n: int = 1) -> str:
+    def generate_repair_variants(expression: str, diagnosis_json: str, memory_context: str) -> str:
         """Generate the single best repair for a failing expression.
         Args:
             expression: The original failing BRAIN expression
             diagnosis_json: JSON string from diagnose_alpha tool
             memory_context: Context string from retrieve_repair_memory tool
-            n: Number of variants (always 1 — generate only the most confident repair)
         Returns JSON array with exactly one candidate: expression, hypothesis, fix_applied.
         """
         # This tool returns a structured prompt for the LLM to fill in.
