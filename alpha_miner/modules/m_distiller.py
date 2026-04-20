@@ -50,10 +50,31 @@ class Distiller:
                 "max_tokens": 800,
                 "max_completion_tokens": 800,
             }
-            raw, tokens_in, tokens_out, latency_ms = _invoke_provider(self, self.router, provider, request_payload)
+            _max_tries = 4
+            _backoff_529 = [20, 45, 90]
+            _backoff_429 = [5, 15, 30]
+            for _attempt in range(_max_tries):
+                try:
+                    raw, tokens_in, tokens_out, latency_ms = _invoke_provider(self, self.router, provider, request_payload)
+                    break
+                except Exception as _invoke_e:
+                    _emsg = str(_invoke_e)
+                    if _attempt < _max_tries - 1:
+                        if "529" in _emsg:
+                            _wait = _backoff_529[_attempt]
+                            print(f"[distiller] distill overloaded (529), retry {_attempt+1}/{_max_tries-1} in {_wait}s", flush=True)
+                            time.sleep(_wait)
+                            continue
+                        if "429" in _emsg:
+                            _wait = _backoff_429[_attempt]
+                            print(f"[distiller] distill rate-limited (429), retry {_attempt+1}/{_max_tries-1} in {_wait}s", flush=True)
+                            time.sleep(_wait)
+                            continue
+                    raise
             distilled = _normalize_distillation(_extract_json(raw))
             _record_result(self.router, provider, True, latency_ms, tokens_in, tokens_out)
-        except Exception:
+        except Exception as _e:
+            print(f"[distiller] distill failed: {type(_e).__name__}: {_e}", flush=True)
             if provider is not None:
                 _record_result(self.router, provider, False, 0.0, 0, 0)
             distilled = _empty_distillation()
