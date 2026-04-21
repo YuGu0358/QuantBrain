@@ -94,29 +94,7 @@ def main() -> None:
     cache = LLMCache(output_dir / "llm_cache")
     taxonomy = load_taxonomy()
     validator = ExpressionValidator()
-    router = None
-    if os.environ.get("LLM_ROUTER_ENABLED", "true").lower() != "false":
-        router = LLMRouter.from_yaml()
-        router._state_path = output_dir / "llm_router_state.json"
-        # load existing state if available
-        state_file = output_dir / "llm_router_state.json"
-        if state_file.exists():
-            router = LLMRouter.load_state(state_file)
-            router._state_path = state_file
-            # Sync with current yaml: add new providers, remove deleted ones.
-            # This prevents stale providers (e.g. gpt45_generate) from being
-            # picked by the bandit after a provider rename/removal.
-            _yaml_router = LLMRouter.from_yaml()
-            for _key, _prov in _yaml_router._providers.items():
-                if _key not in router._providers:
-                    router._providers[_key] = _prov
-                    router._providers_by_role.setdefault(_prov.role, []).append(_prov)
-            for _key in list(router._providers.keys()):
-                if _key not in _yaml_router._providers:
-                    _stale = router._providers.pop(_key)
-                    _role_list = router._providers_by_role.get(_stale.role, [])
-                    router._providers_by_role[_stale.role] = [p for p in _role_list if p.name != _stale.name]
-        router.daily_budget_usd = float(os.environ.get("LLM_BUDGET_DAILY_USD", "3.60"))
+    router = _initialize_router(output_dir)
     agent = HypothesisAgent(
         kb=kb,
         cache=cache,
@@ -757,6 +735,43 @@ def _router_stage_metrics(router) -> dict[str, dict[str, Any]]:
         "cost_usd": dict(sorted(cost_usd.items())),
         "latency_ms": dict(sorted(latency_ms.items())),
     }
+
+
+def _sync_router_with_yaml(router: LLMRouter, yaml_router: LLMRouter) -> LLMRouter:
+    for key, provider in yaml_router._providers.items():
+        if key not in router._providers:
+            router._providers[key] = provider
+            router._providers_by_role.setdefault(provider.role, []).append(provider)
+    for key in list(router._providers.keys()):
+        if key not in yaml_router._providers:
+            stale = router._providers.pop(key)
+            role_list = router._providers_by_role.get(stale.role, [])
+            router._providers_by_role[stale.role] = [item for item in role_list if item.name != stale.name]
+    return router
+
+
+def _initialize_router(output_dir: Path) -> LLMRouter | None:
+    if os.environ.get("LLM_ROUTER_ENABLED", "true").lower() == "false":
+        return None
+
+    run_state_path = output_dir / "llm_router_state.json"
+    shared_state_path = output_dir.parent / "llm_router_state.json"
+    yaml_router = LLMRouter.from_yaml()
+    router = yaml_router
+
+    for state_path in (run_state_path, shared_state_path):
+        if not state_path.exists():
+            continue
+        try:
+            router = LLMRouter.load_state(state_path)
+            break
+        except Exception:
+            router = yaml_router
+
+    router = _sync_router_with_yaml(router, yaml_router)
+    router._state_path = run_state_path
+    router.daily_budget_usd = float(os.environ.get("LLM_BUDGET_DAILY_USD", "3.60"))
+    return router
 
 
 def _resolve_router_provider_name(router, role: str, preferred_name: str | None = None) -> str | None:

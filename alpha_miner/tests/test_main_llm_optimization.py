@@ -6,6 +6,7 @@ from alpha_miner.main import DEFAULT_GENERATION_MODEL
 from alpha_miner.main import DEFAULT_REPAIR_MODEL
 from alpha_miner.main import DEFAULT_REPAIR_ROUTER_PROVIDER_NAME
 from alpha_miner.main import _diagnosis_summary
+from alpha_miner.main import _initialize_router
 from alpha_miner.main import _primary_llm_api_key
 from alpha_miner.main import _resolve_router_provider_name
 from alpha_miner.main import _router_stage_metrics
@@ -79,6 +80,57 @@ def test_should_run_cadence_every_n(tmp_path: Path):
     every_n = 3
     outcomes = [_should_run_cadence(shared_dir, key, every_n) for _ in range(6)]
     assert outcomes == [False, False, True, False, False, True]
+
+
+def test_initialize_router_loads_shared_state_when_run_state_missing(tmp_path: Path, monkeypatch):
+    output_dir = tmp_path / "runs" / "scheduled-001"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    shared_state_path = output_dir.parent / "llm_router_state.json"
+
+    persisted_router = LLMRouter(
+        providers=[
+            LLMProvider(
+                name="gpt_generate",
+                role="generate",
+                model_id="persisted-model",
+                calls=5,
+                wins=3,
+                win_rate=0.6,
+            ),
+            LLMProvider(
+                name="stale_provider",
+                role="generate",
+                model_id="stale-model",
+                calls=2,
+                wins=1,
+                win_rate=0.5,
+            ),
+        ],
+        daily_budget_usd=1.2,
+    )
+    persisted_router.spent_usd = 0.42
+    persisted_router.save_state(shared_state_path)
+
+    yaml_router = LLMRouter(
+        providers=[
+            LLMProvider(name="gpt_generate", role="generate", model_id="yaml-model"),
+            LLMProvider(name="gpt_judge", role="judge", model_id="judge-model"),
+        ]
+    )
+
+    monkeypatch.setattr("alpha_miner.main.LLMRouter.from_yaml", lambda: yaml_router)
+    monkeypatch.setenv("LLM_BUDGET_DAILY_USD", "3.60")
+
+    router = _initialize_router(output_dir)
+
+    assert router is not None
+    assert router._state_path == output_dir / "llm_router_state.json"
+    assert ("gpt_generate", "generate") in router._providers
+    assert router._providers[("gpt_generate", "generate")].calls == 5
+    assert ("gpt_judge", "judge") in router._providers
+    assert ("stale_provider", "generate") not in router._providers
+    assert router.spent_usd == pytest.approx(0.42)
+    assert router.daily_budget_usd == pytest.approx(3.60)
 
 
 def test_router_yaml_avoids_legacy_anthropic_model_aliases():
