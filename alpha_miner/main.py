@@ -62,6 +62,15 @@ def _diagnosis_summary(diagnosis: Any) -> dict[str, Any] | None:
     }
 
 
+def _quality_stage_summary(agent: Any) -> dict[str, Any]:
+    generation = dict(getattr(agent, "last_generation_quality", {}) or {})
+    repair = dict(getattr(agent, "last_repair_quality", {}) or {})
+    return {
+        "generation": generation,
+        "repair": repair,
+    }
+
+
 def main() -> None:
     args = parse_args()
     started = time.time()
@@ -233,6 +242,7 @@ def main() -> None:
     validator_records = []
     valid_candidates = []
     rejected_by_stage = {
+        "generation_quality": 0,
         "validator": 0,
         "economic_prescreen": 0,
         "dsr": 0,
@@ -241,6 +251,7 @@ def main() -> None:
         "orthogonality": 0,
         "no_pnl": 0,
     }
+    rejected_by_stage["generation_quality"] = int((getattr(agent, "last_generation_quality", {}) or {}).get("rejected_count", 0))
     for candidate in candidates:
         validation = validator.validate(candidate.expression)
         prescreen = economic_logic_prescreen(candidate.expression)
@@ -564,6 +575,7 @@ def main() -> None:
     write_json(output_dir / "memory.json", memory)
 
     _llm_stage_metrics = _router_stage_metrics(router)
+    _quality_metrics = _quality_stage_summary(agent)
     summary = {
         "engine": "python-v2",
         "mode": args.mode,
@@ -584,6 +596,7 @@ def main() -> None:
         "llm_stage_calls": _llm_stage_metrics["calls"],
         "llm_stage_cost_usd": _llm_stage_metrics["cost_usd"],
         "llm_stage_latency_ms": _llm_stage_metrics["latency_ms"],
+        "quality_stage_metrics": _quality_metrics,
         "total_brain_simulations": len(evaluated_records) + companion_sign_flip_count,
         "total_runtime_seconds": round(time.time() - started, 4),
         "rejected_by_stage": rejected_by_stage,

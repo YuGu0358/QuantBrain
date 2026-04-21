@@ -6,6 +6,7 @@ from alpha_miner.main import DEFAULT_GENERATION_MODEL
 from alpha_miner.main import DEFAULT_REPAIR_MODEL
 from alpha_miner.main import DEFAULT_REPAIR_ROUTER_PROVIDER_NAME
 from alpha_miner.main import _diagnosis_summary
+from alpha_miner.main import _quality_stage_summary
 from alpha_miner.main import _initialize_router
 from alpha_miner.main import _primary_llm_api_key
 from alpha_miner.main import _resolve_router_provider_name
@@ -196,3 +197,24 @@ def test_diagnosis_summary_preserves_fallback_error():
         "fallback": True,
         "error": "diagnose timeout",
     }
+
+
+def test_quality_stage_summary_reads_agent_quality_metrics():
+    class _Agent:
+        last_generation_quality = {
+            "passed_count": 2,
+            "rejected_count": 1,
+            "sample_confidence": 0.91,
+        }
+        last_repair_quality = {
+            "route": "hybrid",
+            "passed_count": 1,
+            "sample_confidence": 0.74,
+        }
+
+    summary = _quality_stage_summary(_Agent())
+
+    assert summary["generation"]["passed_count"] == 2
+    assert summary["generation"]["sample_confidence"] == 0.91
+    assert summary["repair"]["route"] == "hybrid"
+    assert summary["repair"]["sample_confidence"] == 0.74

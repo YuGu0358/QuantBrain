@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 import uuid
 from datetime import datetime
@@ -10,12 +11,19 @@ from typing import Any
 
 
 class RepairMemory:
-    def __init__(self, db_path: Path):
+    def __init__(self, db_path: Path, embedder: Any | None = None):
         self.db_path = Path(db_path)
+        self.embedder = embedder
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
+    def set_embedder(self, embedder: Any | None) -> None:
+        self.embedder = embedder
+
     def add_record(self, record: dict) -> None:
+        record = dict(record or {})
+        if self.embedder is not None and not record.get("embedding_json"):
+            record["embedding_json"] = self._embed_text(self._record_text(record))
         values = _record_values(record)
         with self._connect() as conn:
             conn.execute(
@@ -25,9 +33,9 @@ class RepairMemory:
                     accept_decision, rejection_reason, recommended_directions,
                     forbidden_directions, metrics, family_tag, notes,
                     math_profile, economic_profile, repair_delta, outcome_score,
-                    platform_outcome
+                    platform_outcome, embedding_json
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     values["record_id"],
@@ -47,6 +55,7 @@ class RepairMemory:
                     values["repair_delta"],
                     values["outcome_score"],
                     values["platform_outcome"],
+                    values["embedding_json"],
                 ),
             )
 
@@ -77,11 +86,14 @@ class RepairMemory:
         economic_profile: dict | None = None,
     ) -> dict:
         records = self.get_recent(limit=10000)
+        semantic_scores = self._semantic_scores(records, expression, symptom_tags)
         scored_records = [
             {
                 **record,
                 "symptom_tags": _string_list(record.get("symptom_tags", [])),
-                "score": _retrieval_score(record, symptom_tags, family_tag, math_profile, economic_profile),
+                "semantic_score": round(float(semantic_scores.get(str(record.get("record_id")), 0.0)), 6),
+                "score": _retrieval_score(record, symptom_tags, family_tag, math_profile, economic_profile)
+                + float(semantic_scores.get(str(record.get("record_id")), 0.0)) * 0.45,
             }
             for record in records
         ]
@@ -192,6 +204,7 @@ class RepairMemory:
                 "repair_delta": "ALTER TABLE repair_records ADD COLUMN repair_delta TEXT",
                 "outcome_score": "ALTER TABLE repair_records ADD COLUMN outcome_score REAL",
                 "platform_outcome": "ALTER TABLE repair_records ADD COLUMN platform_outcome TEXT",
+                "embedding_json": "ALTER TABLE repair_records ADD COLUMN embedding_json TEXT",
             }
             for column, statement in migrations.items():
                 if column not in existing:
@@ -201,6 +214,59 @@ class RepairMemory:
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         return conn
+
+    def _semantic_scores(self, records: list[dict[str, Any]], expression: str, symptom_tags: list[str]) -> dict[str, float]:
+        if self.embedder is None or not records:
+            return {}
+        self._ensure_embeddings(records)
+        query_text = f"{expression} {' '.join(_string_list(symptom_tags))}".strip()
+        query_embedding = self._embed_text(query_text)
+        if not query_embedding:
+            return {}
+        scores: dict[str, float] = {}
+        for record in records:
+            vector = _float_list(record.get("embedding_json"))
+            if not vector:
+                continue
+            scores[str(record.get("record_id"))] = _cosine_similarity(query_embedding, vector)
+        return scores
+
+    def _ensure_embeddings(self, records: list[dict[str, Any]]) -> None:
+        if self.embedder is None:
+            return
+        missing = [record for record in records if not _float_list(record.get("embedding_json"))]
+        if not missing:
+            return
+        texts = [self._record_text(record) for record in missing]
+        vectors = self.embedder.embed_documents(texts)
+        with self._connect() as conn:
+            for record, vector in zip(missing, vectors):
+                record["embedding_json"] = _float_list(vector)
+                conn.execute(
+                    "UPDATE repair_records SET embedding_json = ? WHERE record_id = ?",
+                    (json.dumps(record["embedding_json"], ensure_ascii=False), record.get("record_id")),
+                )
+
+    def _embed_text(self, text: str) -> list[float]:
+        if self.embedder is None:
+            return []
+        try:
+            return _float_list(self.embedder.embed_query(text))
+        except Exception:
+            return []
+
+    def _record_text(self, record: dict[str, Any]) -> str:
+        return " ".join(
+            part
+            for part in [
+                str(record.get("expression") or ""),
+                " ".join(_string_list(record.get("symptom_tags", []))),
+                " ".join(_string_list(record.get("recommended_directions", []))),
+                " ".join(_string_list(record.get("forbidden_directions", []))),
+                str((record.get("economic_profile") or {}).get("theme") or ""),
+            ]
+            if part
+        ).strip()
 
 
 _JSON_FIELDS = {
@@ -213,6 +279,7 @@ _JSON_FIELDS = {
     "economic_profile",
     "repair_delta",
     "platform_outcome",
+    "embedding_json",
 }
 
 _JSON_DEFAULTS = {
@@ -225,6 +292,7 @@ _JSON_DEFAULTS = {
     "economic_profile": {},
     "repair_delta": {},
     "platform_outcome": {},
+    "embedding_json": [],
 }
 
 
@@ -248,6 +316,7 @@ def _record_values(record: dict[str, Any]) -> dict[str, str]:
         "repair_delta": record.get("repair_delta", {}),
         "outcome_score": _float_or_default(record.get("outcome_score"), 0.0),
         "platform_outcome": record.get("platform_outcome", {}),
+        "embedding_json": _float_list(record.get("embedding_json")),
     }
     for field in _JSON_FIELDS:
         values[field] = json.dumps(values[field], ensure_ascii=False)
@@ -317,6 +386,17 @@ def _jaccard(left: Any, right: Any) -> float:
     return len(left_set.intersection(right_set)) / len(union)
 
 
+def _cosine_similarity(left: list[float], right: list[float]) -> float:
+    if not left or not right or len(left) != len(right):
+        return 0.0
+    numerator = sum(a * b for a, b in zip(left, right))
+    left_norm = math.sqrt(sum(a * a for a in left))
+    right_norm = math.sqrt(sum(b * b for b in right))
+    if left_norm == 0.0 or right_norm == 0.0:
+        return 0.0
+    return numerator / (left_norm * right_norm)
+
+
 def _float_or_default(value: Any, default: float) -> float:
     try:
         if value in (None, ""):
@@ -358,6 +438,24 @@ def _string_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
     return [str(item) for item in value if item not in (None, "")]
+
+
+def _float_list(value: Any) -> list[float]:
+    if isinstance(value, str):
+        decoded = _loads_json(value, None)
+        if isinstance(decoded, list):
+            value = decoded
+        else:
+            return []
+    if not isinstance(value, list):
+        return []
+    floats: list[float] = []
+    for item in value:
+        try:
+            floats.append(float(item))
+        except (TypeError, ValueError):
+            return []
+    return floats
 
 
 def _flatten_unique(records: list[dict[str, Any]], field: str) -> list[str]:

@@ -11,8 +11,6 @@ import re
 import time
 from typing import Any
 
-import numpy as np
-
 from alpha_miner.modules.m_repair_memory import RepairMemory
 from alpha_miner.modules.m_repair_intelligence import (
     analyze_math_profile,
@@ -92,6 +90,7 @@ DEFAULT_REPAIR_CHAIN_MODEL = "gpt-5.4-2026-03-05"
 def build_tools(memory: RepairMemory, embeddings: Any, validator: Any) -> list:
     """Build LangChain tools with injected dependencies."""
     from langchain_core.tools import tool
+    memory.set_embedder(embeddings)
     blocked_operators = sorted(str(item) for item in getattr(validator, "blocked_operators", []) if str(item))
 
     @tool
@@ -188,43 +187,25 @@ def build_tools(memory: RepairMemory, embeddings: Any, validator: Any) -> list:
             symptoms: Comma-separated symptom names (e.g. 'low_sharpe,low_fitness')
         Returns formatted list of past successful and failed repairs.
         """
-        k = 5
         try:
-            records = memory.get_recent(limit=500)
-            if not records:
+            symptom_tags = [c.strip() for c in symptoms.split(",") if c.strip()]
+            if not memory.get_recent(limit=1):
                 return "No historical repair cases found yet."
-
-            if embeddings is not None:
-                query = f"{expression} {symptoms}"
-                import faiss
-                def _to_str(v: Any) -> str:
-                    return " ".join(v) if isinstance(v, list) else str(v or "")
-                texts = [
-                    f"{r.get('expression', '')} {_to_str(r.get('symptom_tags', []))} {_to_str(r.get('recommended_directions', []))}"
-                    for r in records
-                ]
-                vecs = np.array(embeddings.embed_documents(texts), dtype=np.float32)
-                faiss.normalize_L2(vecs)
-                index = faiss.IndexFlatIP(vecs.shape[1])
-                index.add(vecs)
-                q = np.array([embeddings.embed_query(query)], dtype=np.float32)
-                faiss.normalize_L2(q)
-                _, idxs = index.search(q, min(k, len(records)))
-                top = [records[i] for i in idxs[0] if 0 <= i < len(records)]
-            else:
-                top = records[:k]
+            retrieval = memory.retrieve(symptom_tags, expression, topk=5)
+            top = [*retrieval.get("positive", []), *retrieval.get("negative", [])]
 
             lines = []
             for i, r in enumerate(top, 1):
                 decision = r.get("accept_decision", "?")
                 expr = (r.get("expression") or "")[:80]
                 tags = ", ".join(v for v in (r.get("symptom_tags") or []) if v)
+                semantic = r.get("semantic_score", 0.0)
                 if decision == "accepted":
                     dirs = ", ".join(v for v in (r.get("recommended_directions") or []) if v)
-                    lines.append(f"{i}. [SUCCESS] {expr} | {tags} | fix: {dirs}")
+                    lines.append(f"{i}. [SUCCESS] {expr} | {tags} | semantic={semantic} | fix: {dirs}")
                 else:
                     dirs = ", ".join(v for v in (r.get("forbidden_directions") or []) if v)
-                    lines.append(f"{i}. [FAILED]  {expr} | {tags} | avoid: {dirs}")
+                    lines.append(f"{i}. [FAILED]  {expr} | {tags} | semantic={semantic} | avoid: {dirs}")
             return "\n".join(lines) if lines else "No relevant past repairs found."
         except Exception as exc:
             return f"Retrieval error: {exc}"
@@ -503,6 +484,8 @@ class RepairChain:
         category: str = "UNKNOWN",
         validator: Any = None,
         repair_context: dict | None = None,
+        seed_candidates: list[dict[str, Any]] | None = None,
+        repair_policy: dict[str, Any] | None = None,
     ) -> tuple[list[dict], dict]:
         """Run the repair agent. Returns (candidates, diagnosis)."""
         sharpe = metrics.get("sharpe") or metrics.get("isSharpe")
@@ -521,6 +504,16 @@ class RepairChain:
         )
         if recursive_guidance:
             user_input += "\n" + "\n".join(recursive_guidance)
+        if repair_policy:
+            user_input += (
+                "\nRepair routing policy:\n"
+                + json.dumps(repair_policy, ensure_ascii=False)
+            )
+        if seed_candidates:
+            user_input += (
+                "\nRule-based seed candidates (use as mathematical/economic starting points, not as final answers):\n"
+                + json.dumps(seed_candidates, ensure_ascii=False)
+            )
 
         try:
             import os

@@ -13,8 +13,17 @@ from .m1_knowledge_base import KnowledgeBase
 from alpha_miner.modules.m_diagnoser import DiagnosisReport
 from alpha_miner.modules.asset_manifest import get_asset_profile
 from alpha_miner.modules.m_repair_intelligence import build_recursive_repair_guidance
+from alpha_miner.modules.m_generation_quality import (
+    assess_generation_candidate_quality,
+    summarize_generation_quality,
+)
 from alpha_miner.modules.operator_constraints import load_blocked_operators
 from alpha_miner.modules.m_repair_memory import RepairMemory
+from alpha_miner.modules.m_repair_quality import (
+    assess_repair_candidate_quality,
+    decide_repair_route,
+    summarize_repair_quality,
+)
 from alpha_miner.modules.m_retriever import Retriever
 from alpha_miner.modules.m_planner import Planner, RepairPlan
 from alpha_miner.modules.m_scheduler import BanditScheduler
@@ -79,6 +88,9 @@ class HypothesisAgent:
         self.judge_pool_factor = max(1.1, float(os.environ.get("LLM_JUDGE_MIN_POOL_FACTOR", "1.8")))
         self.compact_context_enabled = os.environ.get("LLM_COMPACT_CONTEXT_ENABLED", "true").lower() != "false"
         self.repair_agent_escalation_after = max(0, int(os.environ.get("REPAIR_AGENT_ESCALATION_AFTER", "1")))
+        self.generation_quality_min_score = float(os.environ.get("GENERATION_QUALITY_MIN_SCORE", "0.45"))
+        self.last_generation_quality: dict[str, Any] = {}
+        self.last_repair_quality: dict[str, Any] = {}
 
     def sample_underweight_category(self, existing_counts: dict[str, int] | None = None) -> str:
         counts = existing_counts or {}
@@ -98,17 +110,28 @@ class HypothesisAgent:
     ) -> list[Candidate]:
         # --- LangChain repair path (takes priority when repair_chain is set) ---
         is_repair_mode = repair_context is not None and bool(repair_context.get("expression"))
+        rule_candidates: list[Candidate] = []
+        repair_route = None
         if is_repair_mode:
-            # Rule-first repair path to reduce token usage; escalate to agent only
-            # for complex or repeated failures.
             rule_candidates = self._rule_based_repair_candidates(repair_context, category, n)
-            should_escalate = self._should_escalate_repair_agent(repair_context)
-            if rule_candidates and not should_escalate:
-                return rule_candidates[:n]
-            if rule_candidates and self.repair_chain is None and not ((self.use_llm or use_llm) and self.router):
-                return rule_candidates[:n]
+            repair_route = decide_repair_route(
+                repair_context,
+                diagnosis=diagnosis,
+                has_chain=self.repair_chain is not None,
+                rule_candidate_count=len(rule_candidates),
+            )
+            if repair_route.route == "rule_only" and rule_candidates:
+                return self._select_repair_candidates(
+                    repair_context.get("expression", ""),
+                    rule_candidates,
+                    diagnosis=diagnosis,
+                    repair_context=repair_context,
+                    n=n,
+                    route=repair_route.route,
+                    seed_candidate_count=0,
+                )
 
-        if is_repair_mode and self.repair_chain is not None:
+        if is_repair_mode and self.repair_chain is not None and repair_route is not None:
             try:
                 parent_expr = repair_context.get("expression", "")
                 failed_checks = repair_context.get("failedChecks") or []
@@ -123,17 +146,41 @@ class HypothesisAgent:
                     category=category,
                     validator=self.validator,
                     repair_context=repair_context,
+                    seed_candidates=[asdict(item) for item in rule_candidates] if repair_route.use_rule_seeds else None,
+                    repair_policy={
+                        "route": repair_route.route,
+                        "reasons": repair_route.reasons,
+                        "use_rule_seeds": repair_route.use_rule_seeds,
+                    },
                 )
                 if candidates_raw:
                     print(f"[repair_chain] generated {len(candidates_raw)} candidates via LangChain", flush=True)
-                    return [_candidate_from_payload(c) for c in candidates_raw][:n]
+                    selected = self._select_repair_candidates(
+                        parent_expr,
+                        [_candidate_from_payload(c) for c in candidates_raw],
+                        diagnosis=diagnosis,
+                        repair_context=repair_context,
+                        n=n,
+                        route=repair_route.route,
+                        seed_candidate_count=len(rule_candidates),
+                    )
+                    if selected:
+                        return selected
             except Exception as exc:
                 import traceback
                 print(f"[repair_chain] ERROR: {type(exc).__name__}: {exc}", flush=True)
                 traceback.print_exc()
                 print(f"[repair_chain] falling back to legacy generation path", flush=True)
             if rule_candidates:
-                return rule_candidates[:n]
+                return self._select_repair_candidates(
+                    repair_context.get("expression", ""),
+                    rule_candidates,
+                    diagnosis=diagnosis,
+                    repair_context=repair_context,
+                    n=n,
+                    route="rule_fallback",
+                    seed_candidate_count=0,
+                )
 
         request_payload = self._request_payload(objective, category, n, repair_context=repair_context, diagnosis=diagnosis)
         cached = self.cache.get(request_payload)
@@ -166,23 +213,16 @@ class HypothesisAgent:
                 seen_expressions.add(candidate.expression)
                 unique_candidates.append(candidate)
 
-            judge_pool = unique_candidates if len(unique_candidates) > n else candidate_pool
-            should_judge = (not self.optimized_generation_enabled) or (
-                len(judge_pool) >= max(n + 2, int(n * self.judge_pool_factor))
+            judge_pool = unique_candidates or candidate_pool
+            should_judge = len(judge_pool) > 1
+            judged = self._judge_candidates(judge_pool, len(judge_pool), self.router) if should_judge else judge_pool[:]
+            selected = self._select_generation_candidates(
+                objective,
+                category,
+                [*judged, *unique_candidates],
+                n=n,
+                judge_applied=should_judge,
             )
-            judged = self._judge_candidates(judge_pool, n, self.router) if should_judge else judge_pool[:n]
-            selected: list[Candidate] = []
-            selected_expressions: set[str] = set()
-            for candidate in [*judged, *unique_candidates]:
-                if candidate.expression in selected_expressions:
-                    continue
-                selected_expressions.add(candidate.expression)
-                selected.append(candidate)
-                if len(selected) >= n:
-                    break
-
-            if not selected:
-                selected = self._deterministic_candidates(objective, category, n)
             response = {"candidates": [asdict(item) for item in selected]}
             self.cache.put(request_payload, response)
         else:
@@ -431,6 +471,139 @@ class HypothesisAgent:
             compact[key] = text.split(";")[0].split("—")[0].strip() or text
         return compact
 
+    @staticmethod
+    def _candidate_with_metadata(
+        candidate: Candidate,
+        metadata: dict[str, Any] | None = None,
+        extra_origin_refs: list[str] | None = None,
+    ) -> Candidate:
+        merged_metadata = dict(candidate.metadata)
+        for key, value in (metadata or {}).items():
+            merged_metadata[str(key)] = str(value)
+        origin_refs = list(candidate.origin_refs)
+        for ref in extra_origin_refs or []:
+            if ref not in origin_refs:
+                origin_refs.append(ref)
+        return Candidate(
+            id=candidate.id,
+            category=candidate.category,
+            hypothesis=candidate.hypothesis,
+            expression=candidate.expression,
+            origin_refs=origin_refs,
+            metadata=merged_metadata,
+            opt_rounds=candidate.opt_rounds,
+        )
+
+    def _select_generation_candidates(
+        self,
+        objective: str,
+        category: str,
+        ranked_candidates: list[Candidate],
+        *,
+        n: int,
+        judge_applied: bool,
+    ) -> list[Candidate]:
+        assessments = []
+        selected: list[Candidate] = []
+        selected_expressions: set[str] = set()
+        seen_signatures: set[str] = set()
+
+        for candidate in ranked_candidates:
+            if candidate.expression in selected_expressions:
+                continue
+            assessment = assess_generation_candidate_quality(
+                candidate.expression,
+                category=category,
+                candidate_id=candidate.id,
+                seen_signatures=seen_signatures,
+                min_score=self.generation_quality_min_score,
+            )
+            assessments.append(assessment)
+            if not assessment.passed:
+                continue
+            selected_expressions.add(candidate.expression)
+            if assessment.signature:
+                seen_signatures.add(assessment.signature)
+            selected.append(
+                self._candidate_with_metadata(
+                    candidate,
+                    metadata={
+                        "generation_quality_score": f"{assessment.score:.6f}",
+                        "generation_theme": assessment.theme,
+                    },
+                )
+            )
+            if len(selected) >= n:
+                break
+
+        fallback_count = 0
+        if len(selected) < n:
+            for fallback in self._deterministic_candidates(objective, category, max(n * 2, n)):
+                if fallback.expression in selected_expressions:
+                    continue
+                selected_expressions.add(fallback.expression)
+                selected.append(
+                    self._candidate_with_metadata(
+                        fallback,
+                        metadata={"fallback_reason": "quality_gate_backfill"},
+                    )
+                )
+                fallback_count += 1
+                if len(selected) >= n:
+                    break
+
+        self.last_generation_quality = summarize_generation_quality(
+            assessments,
+            selected_count=max(len(selected) - fallback_count, 0),
+            fallback_count=fallback_count,
+            judge_applied=judge_applied,
+        )
+        return selected[:n]
+
+    def _select_repair_candidates(
+        self,
+        parent_expression: str,
+        candidates: list[Candidate],
+        *,
+        diagnosis: DiagnosisReport | dict | None,
+        repair_context: dict | None,
+        n: int,
+        route: str,
+        seed_candidate_count: int,
+    ) -> list[Candidate]:
+        assessments = []
+        selected: list[Candidate] = []
+        seen_expressions: set[str] = set()
+
+        for candidate in candidates:
+            if candidate.expression in seen_expressions:
+                continue
+            assessment = assess_repair_candidate_quality(
+                parent_expression=parent_expression,
+                candidate=candidate,
+                diagnosis=diagnosis,
+                repair_context=repair_context,
+            )
+            assessments.append(assessment)
+            if not assessment.passed:
+                continue
+            seen_expressions.add(candidate.expression)
+            selected.append(
+                self._candidate_with_metadata(
+                    candidate,
+                    metadata={"repair_quality_score": f"{assessment.score:.6f}"},
+                )
+            )
+            if len(selected) >= n:
+                break
+
+        self.last_repair_quality = summarize_repair_quality(
+            assessments,
+            route=route,
+            seed_candidate_count=seed_candidate_count,
+        )
+        return selected[:n]
+
     def _should_escalate_repair_agent(self, repair_context: dict | None) -> bool:
         if not repair_context:
             return False
@@ -584,7 +757,7 @@ class HypothesisAgent:
         return {"candidates": []}
 
     def _judge_candidates(self, candidates: list[Candidate], n: int, router) -> list[Candidate]:
-        if not router or len(candidates) <= n:
+        if not router or len(candidates) <= 1:
             return candidates[:n]
         try:
             provider = router.pick("judge")
@@ -604,7 +777,13 @@ class HypothesisAgent:
             indices = self._call_llm(request_payload).get("selected_indices", [])
             if not indices:
                 return candidates[:n]
-            return [candidates[int(i)] for i in indices if 0 <= int(i) < len(candidates)][:n]
+            ordered = [candidates[int(i)] for i in indices if 0 <= int(i) < len(candidates)]
+            selected_expressions = {item.expression for item in ordered}
+            for candidate in candidates:
+                if candidate.expression in selected_expressions:
+                    continue
+                ordered.append(candidate)
+            return ordered[:n]
         except Exception:
             return candidates[:n]
 

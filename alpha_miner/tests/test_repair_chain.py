@@ -246,6 +246,51 @@ def test_repair_memory_retrieval_prefers_matching_logic_profiles(tmp_memory):
     assert result["positive"][0]["expression"] == "group_rank(ts_mean(volume, 63), industry)"
 
 
+class _KeywordEmbedder:
+    def embed_documents(self, texts):
+        return [self.embed_query(text) for text in texts]
+
+    def embed_query(self, text):
+        lowered = str(text or "").lower()
+        if "volume" in lowered or "adv20" in lowered:
+            return [1.0, 0.0]
+        if "cashflow" in lowered or "operating_income" in lowered:
+            return [0.0, 1.0]
+        return [0.5, 0.5]
+
+
+def test_repair_memory_persists_embeddings_for_semantic_retrieval(tmp_path):
+    db_path = tmp_path / "repair_memory.db"
+    memory = RepairMemory(db_path, embedder=_KeywordEmbedder())
+    memory.add_record({
+        "expression": "group_rank(ts_mean(volume, 63), industry)",
+        "symptom_tags": ["low_sharpe"],
+        "accept_decision": "accepted",
+        "recommended_directions": ["use liquidity confirmation"],
+        "math_profile": analyze_math_profile("group_rank(ts_mean(volume, 63), industry)"),
+        "economic_profile": infer_economic_profile("group_rank(ts_mean(volume, 63), industry)", category="LIQUIDITY"),
+    })
+    memory.add_record({
+        "expression": "rank(ts_mean(cashflow_op / assets, 126))",
+        "symptom_tags": ["low_sharpe"],
+        "accept_decision": "accepted",
+        "recommended_directions": ["use profitability anchor"],
+        "math_profile": analyze_math_profile("rank(ts_mean(cashflow_op / assets, 126))"),
+        "economic_profile": infer_economic_profile("rank(ts_mean(cashflow_op / assets, 126))", category="QUALITY"),
+    })
+
+    reloaded = RepairMemory(db_path, embedder=_KeywordEmbedder())
+    result = reloaded.retrieve(
+        ["low_sharpe"],
+        "group_rank(ts_rank(volume / adv20, 21), industry)",
+        topk=2,
+        math_profile=analyze_math_profile("group_rank(ts_rank(volume / adv20, 21), industry)"),
+        economic_profile=infer_economic_profile("group_rank(ts_rank(volume / adv20, 21), industry)", category="LIQUIDITY"),
+    )
+
+    assert result["positive"][0]["expression"] == "group_rank(ts_mean(volume, 63), industry)"
+
+
 # ---------------------------------------------------------------------------
 # validate_expression tool
 # ---------------------------------------------------------------------------

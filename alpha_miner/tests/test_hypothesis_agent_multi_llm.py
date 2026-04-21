@@ -1,5 +1,6 @@
 import os
 import json
+from dataclasses import asdict
 from unittest.mock import MagicMock
 from unittest.mock import patch
 
@@ -115,31 +116,46 @@ def test_judge_selects_best_candidates(tmp_path):
     assert result[0].expression == "rank(close)"
 
 
-def test_generate_batch_skips_judge_for_small_pool_when_optimized(tmp_path):
+def test_generate_batch_runs_judge_for_small_pool_when_multiple_candidates_available(tmp_path):
     kb, cache = _kb_and_cache(tmp_path)
     mock_router = MagicMock()
-    mock_router.pick.return_value = _provider("generate")
+    mock_router.pick.side_effect = [_provider("generate"), _provider("judge")]
+    agent = HypothesisAgent(
+        kb=kb,
+        cache=cache,
+        taxonomy={"QUALITY": {}},
+        router=mock_router,
+        use_llm=True,
+    )
     with patch.object(
         HypothesisAgent,
         "_call_llm",
-        return_value={
-            "candidates": [
-                {"id": "c1", "category": "QUALITY", "hypothesis": "h1", "expression": "rank(close)", "origin_refs": []},
-                {"id": "c2", "category": "QUALITY", "hypothesis": "h2", "expression": "rank(volume)", "origin_refs": []},
-            ]
-        },
-    ), patch.object(HypothesisAgent, "_judge_candidates", wraps=HypothesisAgent._judge_candidates) as judge_spy:
-        agent = HypothesisAgent(
-            kb=kb,
-            cache=cache,
-            taxonomy={"QUALITY": {}},
-            router=mock_router,
-            use_llm=True,
-        )
+        side_effect=[
+            {
+                "candidates": [
+                    {
+                        "id": "c1",
+                        "category": "QUALITY",
+                        "hypothesis": "h1",
+                        "expression": "group_rank(ts_rank(operating_income / assets, 252) + ts_rank(volume / adv20, 63), industry)",
+                        "origin_refs": [],
+                    },
+                    {
+                        "id": "c2",
+                        "category": "QUALITY",
+                        "hypothesis": "h2",
+                        "expression": "rank(volume)",
+                        "origin_refs": [],
+                    },
+                ]
+            },
+            {"selected_indices": [0, 1]},
+        ],
+    ), patch.object(agent, "_judge_candidates", wraps=agent._judge_candidates) as judge_spy:
         result = agent.generate_batch("test objective", category="QUALITY", n=2)
 
     assert len(result) == 2
-    assert judge_spy.call_count == 0
+    assert judge_spy.call_count == 1
 
 
 def test_generate_batch_forces_judge_when_optimized_disabled(tmp_path):
@@ -178,6 +194,57 @@ def test_generate_batch_forces_judge_when_optimized_disabled(tmp_path):
 
     assert len(result) == 2
     assert agent._judge_candidates.call_count == 1
+
+
+def test_generate_batch_filters_low_quality_single_family_candidates(tmp_path):
+    kb, cache = _kb_and_cache(tmp_path)
+    mock_router = MagicMock()
+    mock_router.pick.side_effect = [_provider("generate"), _provider("judge")]
+
+    with patch.object(
+        HypothesisAgent,
+        "_call_llm",
+        side_effect=[
+            {
+                "candidates": [
+                    {
+                        "id": "weak_1",
+                        "category": "QUALITY",
+                        "hypothesis": "single price level",
+                        "expression": "rank(close)",
+                        "origin_refs": [],
+                    },
+                    {
+                        "id": "weak_2",
+                        "category": "QUALITY",
+                        "hypothesis": "single liquidity level",
+                        "expression": "rank(volume)",
+                        "origin_refs": [],
+                    },
+                    {
+                        "id": "strong_1",
+                        "category": "QUALITY",
+                        "hypothesis": "profitability with liquidity confirmation",
+                        "expression": "group_rank(ts_rank(operating_income / assets, 252) + ts_rank(volume / adv20, 63), industry)",
+                        "origin_refs": [],
+                    },
+                ]
+            },
+            {"selected_indices": [0, 1, 2]},
+        ],
+    ):
+        agent = HypothesisAgent(
+            kb=kb,
+            cache=cache,
+            taxonomy={"QUALITY": {}},
+            router=mock_router,
+            use_llm=True,
+        )
+        result = agent.generate_batch("test objective", category="QUALITY", n=2)
+
+    expressions = [candidate.expression for candidate in result]
+    assert "group_rank(ts_rank(operating_income / assets, 252) + ts_rank(volume / adv20, 63), industry)" in expressions
+    assert "rank(close)" not in expressions
 
 
 def test_generate_batch_repair_chain_accepts_metadata_payload(tmp_path):
@@ -263,6 +330,61 @@ def test_generate_batch_passes_validator_into_repair_chain(tmp_path):
     assert len(result) == 1
     _, kwargs = agent.repair_chain.run.call_args
     assert kwargs["validator"] is validator
+
+
+def test_generate_batch_repair_chain_receives_rule_seed_candidates(tmp_path):
+    kb, cache = _kb_and_cache(tmp_path)
+    validator = MagicMock()
+    agent = HypothesisAgent(
+        kb=kb,
+        cache=cache,
+        taxonomy={"QUALITY": {}},
+        validator=validator,
+    )
+    agent.repair_chain = MagicMock()
+    agent.repair_chain.run.return_value = (
+        [
+            {
+                "id": "repair_quality_001",
+                "category": "QUALITY",
+                "hypothesis": "repair hypothesis",
+                "expression": "group_rank(ts_rank(cashflow_op / assets, 252) + ts_rank(volume / adv20, 63), industry)",
+                "origin_refs": ["langchain_agent", "llm_mutation"],
+                "metadata": {
+                    "math_logic": "introduce second signal family",
+                    "economic_logic": "quality plus liquidity confirmation",
+                },
+            }
+        ],
+        {},
+    )
+
+    seed_candidates = [
+        Candidate(
+            id="repair_rule_000",
+            category="QUALITY",
+            hypothesis="smooth the parent expression",
+            expression="rank(ts_mean(rank(returns), 20))",
+            origin_refs=["rule_repair", "rule_turnover_smooth"],
+        )
+    ]
+
+    with patch.object(HypothesisAgent, "_rule_based_repair_candidates", return_value=seed_candidates):
+        result = agent.generate_batch(
+            "repair objective",
+            category="QUALITY",
+            n=1,
+            repair_context={
+                "expression": "rank(returns)",
+                "failedChecks": ["TURNOVER"],
+                "gate": {"reasons": ["turnover too high"]},
+                "metrics": {"turnover": 0.9},
+            },
+        )
+
+    assert len(result) == 1
+    _, kwargs = agent.repair_chain.run.call_args
+    assert kwargs["seed_candidates"] == [asdict(seed_candidates[0])]
 
 
 def test_generation_payload_includes_cross_category_examples(tmp_path):
