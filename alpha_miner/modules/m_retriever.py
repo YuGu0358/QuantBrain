@@ -8,6 +8,8 @@ from dataclasses import is_dataclass
 from typing import Any
 
 from alpha_miner.modules.m_diagnoser import DiagnosisReport
+from alpha_miner.modules.m_repair_intelligence import analyze_math_profile
+from alpha_miner.modules.m_repair_intelligence import infer_economic_profile
 from alpha_miner.modules.m_repair_memory import RepairMemory
 
 
@@ -23,14 +25,25 @@ class Retriever:
         family_tag: str | None = None,
     ) -> dict:
         symptom_tags = _diagnosis_symptom_tags(diagnosis)
-        retrieval = self.memory.retrieve(symptom_tags, expression, family_tag, topk=5)
+        math_profile = analyze_math_profile(expression)
+        economic_profile = infer_economic_profile(expression, fields=math_profile.get("fields", []))
+        retrieval = self.memory.retrieve(
+            symptom_tags,
+            expression,
+            family_tag,
+            topk=5,
+            math_profile=math_profile,
+            economic_profile=economic_profile,
+        )
         family_saturated = self.memory.family_saturation(family_tag) if family_tag else False
         retrieval_summary = ""
 
         if self.router is not None:
             provider = None
+            primary_role = os.environ.get("RETRIEVE_SUMMARY_LLM_ROLE", "retrieve_summary")
+            fallback_role = os.environ.get("RETRIEVE_SUMMARY_FALLBACK_ROLE", "repair")
             try:
-                provider = _pick_provider(self.router, "repair")
+                provider = _pick_provider(self.router, primary_role, fallback_role)
                 if provider is None:
                     raise RuntimeError("No LLM provider available")
                 request_payload = {
@@ -54,6 +67,8 @@ class Retriever:
                                     ],
                                     "top_forbidden_directions": retrieval.get("forbidden_directions", [])[:3],
                                     "family_saturated": family_saturated,
+                                    "theme_saturated": retrieval.get("theme_saturated", False),
+                                    "math_saturated": retrieval.get("math_saturated", False),
                                 },
                                 ensure_ascii=False,
                             ),
@@ -68,7 +83,17 @@ class Retriever:
             except Exception:
                 if provider is not None:
                     _record_result(self.router, provider, False, 0.0, 0, 0)
-                retrieval_summary = ""
+                if provider is not None and fallback_role and provider.role != fallback_role:
+                    hq_provider = _pick_provider(self.router, fallback_role)
+                    if hq_provider is not None:
+                        try:
+                            raw, tokens_in, tokens_out, latency_ms = _invoke_provider(self, self.router, hq_provider, request_payload)
+                            retrieval_summary = raw.strip()
+                            _record_result(self.router, hq_provider, bool(retrieval_summary), latency_ms, tokens_in, tokens_out)
+                        except Exception:
+                            _record_result(self.router, hq_provider, False, 0.0, 0, 0)
+                if not retrieval_summary:
+                    retrieval_summary = ""
 
         return {
             **retrieval,
@@ -131,13 +156,18 @@ def _diagnosis_symptom_tags(diagnosis: DiagnosisReport) -> list[str]:
     return list(dict.fromkeys(str(tag) for tag in tags if tag))
 
 
-def _pick_provider(router: Any, role: str) -> Any | None:
+def _pick_provider(router: Any, *roles: str) -> Any | None:
     if router is None:
         return None
-    try:
-        return router.pick(role)
-    except Exception:
-        pass
+    for role in roles:
+        if not role:
+            continue
+        if not _router_has_role(router, role):
+            continue
+        try:
+            return router.pick(role)
+        except Exception:
+            continue
     providers_by_role = getattr(router, "_providers_by_role", None)
     if isinstance(providers_by_role, dict):
         for providers in providers_by_role.values():
@@ -165,6 +195,18 @@ def _record_result(router: Any, provider: Any, passed: bool, latency_ms: float, 
         router.record_result(provider.name, provider.role, passed, latency_ms, tokens_in, tokens_out)
     except Exception:
         return
+
+
+def _router_has_role(router: Any, role: str) -> bool:
+    providers_by_role = getattr(router, "_providers_by_role", None)
+    if isinstance(providers_by_role, dict):
+        candidates = providers_by_role.get(role)
+        if isinstance(candidates, list):
+            return len(candidates) > 0
+    providers = getattr(router, "_providers", None)
+    if isinstance(providers, dict):
+        return any(r == role for _, r in providers.keys())
+    return True
 
 
 def _is_reasoning_model(model_id: str) -> bool:

@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Iterable
 
+from .asset_manifest import AssetProfile, get_asset_profile
 from .config_loader import load_operator_config
+from .operator_constraints import load_blocked_operators
 
 
 _IDENTIFIER = re.compile(r"\b[a-zA-Z_][a-zA-Z0-9_]*\b")
@@ -28,17 +31,30 @@ class ExpressionValidator:
         self,
         operators: Iterable[str] | None = None,
         fields: Iterable[str] | None = None,
+        profile_name: str | None = None,
+        manifest_path: Path | None = None,
+        operator_config_path: Path | None = None,
+        asset_profile: AssetProfile | None = None,
+        blocked_operators: Iterable[str] | None = None,
         min_depth: int = 1,
         max_depth: int = 5,
         max_length: int = 450,
         max_complexity: int = 32,
     ):
-        config = load_operator_config()
+        config = load_operator_config(operator_config_path)
         configured_ops = []
         for values in (config.get("operators") or {}).values():
             configured_ops.extend(values or [])
-        self.operators = set(operators or configured_ops)
-        self.fields = set(fields or config.get("fields") or [])
+        configured_operator_set = set(configured_ops)
+        configured_field_set = set(config.get("fields") or [])
+        profile = asset_profile or get_asset_profile(profile_name, path=manifest_path)
+        profile_operators = set(profile.verified_operators).intersection(configured_operator_set)
+        profile_fields = set(profile.verified_fields).intersection(configured_field_set)
+        self.blocked_operators = set(blocked_operators) if blocked_operators is not None else load_blocked_operators()
+        self.profile_name = profile.name
+        base_operators = set(operators).intersection(profile_operators) if operators is not None else profile_operators
+        self.operators = base_operators - self.blocked_operators
+        self.fields = set(fields).intersection(profile_fields) if fields is not None else profile_fields
         self.min_depth = min_depth
         self.max_depth = max_depth
         self.max_length = max_length
@@ -56,7 +72,10 @@ class ExpressionValidator:
             errors.append("Parentheses are not balanced.")
 
         operators = sorted(set(_FUNCTION.findall(expression)))
-        hallucinated = [operator for operator in operators if operator not in self.operators]
+        blocked = [operator for operator in operators if operator in self.blocked_operators]
+        if blocked:
+            errors.append(f"Blocked operators for active account: {', '.join(blocked)}.")
+        hallucinated = [operator for operator in operators if operator not in self.operators and operator not in self.blocked_operators]
         if hallucinated:
             errors.append(f"Unknown operators: {', '.join(hallucinated)}.")
 

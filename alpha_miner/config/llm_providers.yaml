@@ -1,55 +1,77 @@
 providers:
   # --- GENERATION ---
-  claude_opus_generate:
+  gpt_generate:
     role: generate
-    model_id: claude-opus-4-6
+    model_id: gpt-5.4-2026-03-05
     api_base: null
-    api_key_env: ANTHROPIC_API_KEY
-    client_type: anthropic
-    cost_per_1k_input: 0.005
-    cost_per_1k_output: 0.025
+    api_key_env: OPENAI_API_KEY
+    client_type: openai_compat
+    cost_per_1k_input: 0.0025
+    cost_per_1k_output: 0.015
     weight_initial: 1.0
 
-  # --- REPAIR (RepairChain uses Claude directly; this entry records outcomes for dashboard) ---
-  claude_repair:
+  # --- REPAIR (RepairChain consumes the same model family directly) ---
+  gpt_repair:
     role: repair
-    model_id: claude-opus-4-6
+    model_id: gpt-5.4-2026-03-05
     api_base: null
-    api_key_env: ANTHROPIC_API_KEY
-    client_type: anthropic
-    cost_per_1k_input: 0.005
-    cost_per_1k_output: 0.025
+    api_key_env: OPENAI_API_KEY
+    client_type: openai_compat
+    cost_per_1k_input: 0.0025
+    cost_per_1k_output: 0.015
     weight_initial: 1.0
 
   # --- JUDGE ---
-  claude_opus_judge:
+  gpt_judge:
     role: judge
-    model_id: claude-opus-4-6
+    model_id: gpt-5.4-2026-03-05
     api_base: null
-    api_key_env: ANTHROPIC_API_KEY
-    client_type: anthropic
-    cost_per_1k_input: 0.005
-    cost_per_1k_output: 0.025
+    api_key_env: OPENAI_API_KEY
+    client_type: openai_compat
+    cost_per_1k_input: 0.0025
+    cost_per_1k_output: 0.015
     weight_initial: 1.0
 
   # --- DISTILL ---
-  claude_opus_distill:
+  gpt_distill:
     role: distill
-    model_id: claude-opus-4-6
+    model_id: gpt-5.4-mini
     api_base: null
-    api_key_env: ANTHROPIC_API_KEY
-    client_type: anthropic
-    cost_per_1k_input: 0.005
-    cost_per_1k_output: 0.025
+    api_key_env: OPENAI_API_KEY
+    client_type: openai_compat
+    cost_per_1k_input: 0.00075
+    cost_per_1k_output: 0.0045
+    weight_initial: 1.0
+
+  # --- DIAGNOSE (lightweight-first; fallback role=repair) ---
+  gpt_diagnose:
+    role: diagnose
+    model_id: gpt-5.4-mini
+    api_base: null
+    api_key_env: OPENAI_API_KEY
+    client_type: openai_compat
+    cost_per_1k_input: 0.00075
+    cost_per_1k_output: 0.0045
+    weight_initial: 1.0
+
+  # --- RETRIEVE SUMMARY (lightweight-first; fallback role=repair) ---
+  gpt_retrieve_summary:
+    role: retrieve_summary
+    model_id: gpt-5.4-mini
+    api_base: null
+    api_key_env: OPENAI_API_KEY
+    client_type: openai_compat
+    cost_per_1k_input: 0.00075
+    cost_per_1k_output: 0.0045
     weight_initial: 1.0
 
   # --- IDEA ---
-  claude_opus_idea:
+  gpt_idea:
     role: idea
-    model_id: claude-opus-4-6
+    model_id: gpt-5.4-mini
     api_base: null
-    api_key_env: ANTHROPIC_API_KEY
-    client_type: anthropic
-    cost_per_1k_input: 0.005
-    cost_per_1k_output: 0.025
+    api_key_env: OPENAI_API_KEY
+    client_type: openai_compat
+    cost_per_1k_input: 0.00075
+    cost_per_1k_output: 0.0045
     weight_initial: 1.0

@@ -3,7 +3,7 @@ from __future__ import annotations
 import os, json, re, time
 import random
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +11,9 @@ from .common import PACKAGE_ROOT, read_json
 from .llm_cache import LLMCache
 from .m1_knowledge_base import KnowledgeBase
 from alpha_miner.modules.m_diagnoser import DiagnosisReport
+from alpha_miner.modules.asset_manifest import get_asset_profile
+from alpha_miner.modules.m_repair_intelligence import build_recursive_repair_guidance
+from alpha_miner.modules.operator_constraints import load_blocked_operators
 from alpha_miner.modules.m_repair_memory import RepairMemory
 from alpha_miner.modules.m_retriever import Retriever
 from alpha_miner.modules.m_planner import Planner, RepairPlan
@@ -25,10 +28,20 @@ class Candidate:
     hypothesis: str
     expression: str
     origin_refs: list[str]
+    metadata: dict[str, str] = field(default_factory=dict)
     opt_rounds: int = 0
 
 
+_CANDIDATE_FIELD_NAMES = {item.name for item in fields(Candidate)}
+
+
+def _candidate_from_payload(payload: dict[str, Any]) -> Candidate:
+    return Candidate(**{key: value for key, value in payload.items() if key in _CANDIDATE_FIELD_NAMES})
+
+
 class HypothesisAgent:
+    _system_prompt_cache: dict[str, str] = {}
+
     def __init__(
         self,
         kb: KnowledgeBase,
@@ -42,6 +55,7 @@ class HypothesisAgent:
         router=None,
         use_llm: bool = False,
         repair_memory: RepairMemory | None = None,
+        validator: Any | None = None,
     ):
         self.kb = kb
         self.cache = cache
@@ -54,10 +68,17 @@ class HypothesisAgent:
         self.router = router
         self.use_llm = use_llm
         self.repair_memory = repair_memory
+        self.validator = validator
         self.retriever: Retriever | None = None
         self.planner: Planner | None = None
         self.scheduler: BanditScheduler | None = None
         self.repair_chain: RepairChain | None = None
+        self.optimized_generation_enabled = os.environ.get("LLM_OPTIMIZED_GENERATION_ENABLED", "true").lower() != "false"
+        self.second_pass_enabled = os.environ.get("LLM_SECOND_PASS_ENABLED", "true").lower() != "false"
+        self.second_pass_min_deficit = max(1, int(os.environ.get("LLM_SECOND_PASS_MIN_DEFICIT", "1")))
+        self.judge_pool_factor = max(1.1, float(os.environ.get("LLM_JUDGE_MIN_POOL_FACTOR", "1.8")))
+        self.compact_context_enabled = os.environ.get("LLM_COMPACT_CONTEXT_ENABLED", "true").lower() != "false"
+        self.repair_agent_escalation_after = max(0, int(os.environ.get("REPAIR_AGENT_ESCALATION_AFTER", "1")))
 
     def sample_underweight_category(self, existing_counts: dict[str, int] | None = None) -> str:
         counts = existing_counts or {}
@@ -77,6 +98,16 @@ class HypothesisAgent:
     ) -> list[Candidate]:
         # --- LangChain repair path (takes priority when repair_chain is set) ---
         is_repair_mode = repair_context is not None and bool(repair_context.get("expression"))
+        if is_repair_mode:
+            # Rule-first repair path to reduce token usage; escalate to agent only
+            # for complex or repeated failures.
+            rule_candidates = self._rule_based_repair_candidates(repair_context, category, n)
+            should_escalate = self._should_escalate_repair_agent(repair_context)
+            if rule_candidates and not should_escalate:
+                return rule_candidates[:n]
+            if rule_candidates and self.repair_chain is None and not ((self.use_llm or use_llm) and self.router):
+                return rule_candidates[:n]
+
         if is_repair_mode and self.repair_chain is not None:
             try:
                 parent_expr = repair_context.get("expression", "")
@@ -90,15 +121,19 @@ class HypothesisAgent:
                     gate_reasons=gate_reasons,
                     n=n,
                     category=category,
+                    validator=self.validator,
+                    repair_context=repair_context,
                 )
                 if candidates_raw:
                     print(f"[repair_chain] generated {len(candidates_raw)} candidates via LangChain", flush=True)
-                    return [Candidate(**c) for c in candidates_raw][:n]
+                    return [_candidate_from_payload(c) for c in candidates_raw][:n]
             except Exception as exc:
                 import traceback
                 print(f"[repair_chain] ERROR: {type(exc).__name__}: {exc}", flush=True)
                 traceback.print_exc()
                 print(f"[repair_chain] falling back to legacy generation path", flush=True)
+            if rule_candidates:
+                return rule_candidates[:n]
 
         request_payload = self._request_payload(objective, category, n, repair_context=repair_context, diagnosis=diagnosis)
         cached = self.cache.get(request_payload)
@@ -106,17 +141,25 @@ class HypothesisAgent:
             response = cached.payload["response"]
         elif (self.use_llm or use_llm) and self.router:
             payload1 = request_payload
-            payload2 = {**payload1, "seed": 43}
-            raw_candidates: list[Any] = []
-            with ThreadPoolExecutor(max_workers=2) as executor:
-                for result in executor.map(self._call_llm, [payload1, payload2]):
-                    raw_candidates.extend(result.get("candidates", []))
+            first_result = self._call_llm(payload1)
+            raw_candidates: list[Any] = list(first_result.get("candidates", []))
+            unique_after_first = len({str(item.get("expression", "")) for item in raw_candidates if isinstance(item, dict)})
+            needs_second_pass = (
+                self.optimized_generation_enabled
+                and self.second_pass_enabled
+                and unique_after_first < max(1, n - self.second_pass_min_deficit)
+            )
+            if not self.optimized_generation_enabled:
+                needs_second_pass = True
+            if needs_second_pass:
+                payload2 = {**payload1, "seed": 43}
+                raw_candidates.extend(self._call_llm(payload2).get("candidates", []))
 
             candidate_pool: list[Candidate] = []
             unique_candidates: list[Candidate] = []
             seen_expressions: set[str] = set()
             for item in raw_candidates:
-                candidate = item if isinstance(item, Candidate) else Candidate(**item)
+                candidate = item if isinstance(item, Candidate) else _candidate_from_payload(item)
                 candidate_pool.append(candidate)
                 if candidate.expression in seen_expressions:
                     continue
@@ -124,7 +167,10 @@ class HypothesisAgent:
                 unique_candidates.append(candidate)
 
             judge_pool = unique_candidates if len(unique_candidates) > n else candidate_pool
-            judged = self._judge_candidates(judge_pool, n, self.router)
+            should_judge = (not self.optimized_generation_enabled) or (
+                len(judge_pool) >= max(n + 2, int(n * self.judge_pool_factor))
+            )
+            judged = self._judge_candidates(judge_pool, n, self.router) if should_judge else judge_pool[:n]
             selected: list[Candidate] = []
             selected_expressions: set[str] = set()
             for candidate in [*judged, *unique_candidates]:
@@ -143,27 +189,19 @@ class HypothesisAgent:
             response = {"candidates": [asdict(item) for item in self._deterministic_candidates(objective, category, n)]}
             self.cache.put(request_payload, response)
 
-        return [Candidate(**item) for item in response.get("candidates", [])][:n]
+        return [_candidate_from_payload(item) for item in response.get("candidates", [])][:n]
 
     def _get_operators(self) -> list[str]:
-        return [
-            "abs", "correlation", "covariance", "delay", "delta", "divide", "group_neutralize",
-            "group_rank", "hump", "log", "max", "min", "multiply", "power", "rank", "regression_neut",
-            "scale", "sign", "ts_arg_max", "ts_arg_min", "ts_backfill", "ts_corr", "ts_covariance",
-            "ts_decay_linear", "ts_delta", "ts_mean", "ts_rank", "ts_std_dev", "ts_sum", "ts_zscore",
-            "winsorize", "zscore",
-        ]
+        blocked = load_blocked_operators()
+        return [operator for operator in get_asset_profile().verified_operators if operator not in blocked]
 
     def _get_fields(self) -> list[str]:
-        return [
-            "adv20", "assets", "cashflow_op", "close", "est_eps", "high", "industry", "low",
-            "news_sentiment", "open", "operating_income", "returns", "subindustry", "volume", "vwap",
-        ]
+        return list(get_asset_profile().verified_fields)
 
     def _get_field_semantics(self) -> dict[str, str]:
         return {
             "close": "daily closing price — trend anchor, use for price ratios",
-            "open": "daily opening price — overnight gap = open/delay(close,1)-1",
+            "open": "daily opening price — overnight gap proxy, compare against recent close averages",
             "high": "daily high — resistance proxy, range = high-low",
             "low": "daily low — support proxy, combine with high for volatility",
             "vwap": "volume-weighted avg price — institutional anchor; close/vwap>1 = net buying pressure",
@@ -188,17 +226,23 @@ class HypothesisAgent:
         diagnosis: DiagnosisReport | None = None,
     ) -> dict[str, Any]:
         context = self.kb.rag_context(category, query=f"{objective} {category}")
-        # Templates for the target category shown as positive examples
-        positive_templates = [
-            {"expression": expr, "hypothesis": hyp}
-            for expr, hyp in _templates_for_category(category)[:3]
-        ]
+        positive_templates = []
+        for example_category in [category, *[item for item in _ALL_TEMPLATES if item != category]]:
+            expr, hyp = _templates_for_category(example_category)[0]
+            positive_templates.append({
+                "category": example_category,
+                "expression": expr,
+                "hypothesis": hyp,
+            })
+            if len(positive_templates) >= 4:
+                break
 
         is_repair = repair_context is not None and bool(repair_context.get("expression"))
         if is_repair:
             parent_expr = repair_context.get("expression", "")
             failed_checks = repair_context.get("failedChecks") or []
             gate_reasons = repair_context.get("gate", {}).get("reasons") or []
+            recursive_guidance = build_recursive_repair_guidance(repair_context)
             if diagnosis is not None:
                 repair_priorities = diagnosis.repair_priorities[:2]
                 requirement = (
@@ -223,11 +267,16 @@ class HypothesisAgent:
                     f"Gate reasons: {'; '.join(gate_reasons[:3])}. "
                     + _repair_instructions(failed_checks)
                 )
+            if recursive_guidance:
+                requirement = requirement + " " + " ".join(recursive_guidance)
             user_dict: dict[str, Any] = {
                 "mode": "repair",
                 "parent_expression": parent_expr,
                 "failed_checks": failed_checks,
                 "gate_reasons": gate_reasons,
+                "repair_depth": int(repair_context.get("repairDepth") or 0),
+                "next_action": repair_context.get("nextAction"),
+                "recursive_guidance": recursive_guidance,
                 "requirement": requirement,
             }
             if diagnosis is not None:
@@ -250,11 +299,25 @@ class HypothesisAgent:
                             requirement
                             + " IMPORTANT: This alpha family is saturated — generate candidates from a DIFFERENT signal category."
                         )
-                        user_dict["requirement"] = requirement
+                    if retrieval.get("theme_saturated"):
+                        requirement = (
+                            requirement
+                            + " IMPORTANT: The economic theme is saturated — do not repeat the same thesis/mechanism pair."
+                        )
+                    if retrieval.get("math_saturated"):
+                        requirement = (
+                            requirement
+                            + " IMPORTANT: The math neighborhood is saturated — avoid pure window tuning and change structure/operators."
+                        )
+                    user_dict["requirement"] = requirement
                     if forbidden_directions:
                         user_dict["forbidden_directions"] = forbidden_directions
                     if recommended_directions:
                         user_dict["recommended_directions"] = recommended_directions
+                    if retrieval.get("saturated_themes"):
+                        user_dict["saturated_themes"] = retrieval["saturated_themes"]
+                    if retrieval.get("saturated_math_signatures"):
+                        user_dict["saturated_math_signatures"] = retrieval["saturated_math_signatures"]
                     if retrieval.get("retrieval_summary"):
                         user_dict["retrieval_summary"] = str(retrieval["retrieval_summary"])
                     # Planner: decide candidate mix and update requirement
@@ -263,11 +326,13 @@ class HypothesisAgent:
                         plan = self.planner.plan(diagnosis, retrieval, total_budget=n, scheduler_weights=sched_weights)
                         mix = plan.candidate_mix
                         requirement = (
-                            f"Generate exactly {n} repair candidates with this mix: "
-                            f"{mix.get('param_tune',0)} param_tune (only adjust window/lag/threshold params), "
-                            f"{mix.get('struct_mutation',0)} struct_mutation (replace subtrees/operators), "
-                            f"{mix.get('template_retrieval',0)} template_retrieval (from positive memory), "
-                            f"{mix.get('llm_mutation',0)} llm_mutation (creative LLM rewrite). "
+                            requirement
+                            + " "
+                            + f"Generate exactly {n} repair candidates with this mix: "
+                            + f"{mix.get('param_tune',0)} param_tune (only adjust window/lag/threshold params), "
+                            + f"{mix.get('struct_mutation',0)} struct_mutation (replace subtrees/operators), "
+                            + f"{mix.get('template_retrieval',0)} template_retrieval (from positive memory), "
+                            + f"{mix.get('llm_mutation',0)} llm_mutation (creative LLM rewrite). "
                             "For each candidate add the action_type string to origin_refs list."
                         )
                         user_dict["requirement"] = requirement
@@ -289,7 +354,8 @@ class HypothesisAgent:
             requirement = (
                 f"Generate {n} diverse alphas for the {category} category. "
                 "Each MUST combine data from at least 2 distinct field types "
-                "(fundamentals/price/volume/sentiment). Prefer industry-neutralized expressions."
+                "(fundamentals/price/volume/sentiment). Prefer industry-neutralized expressions. "
+                "Do not repeat the same field bundle or economic thesis more than once in the batch."
             )
             user_dict = {}
 
@@ -300,10 +366,10 @@ class HypothesisAgent:
             "requirement": requirement,
             "allowed_operators": sorted(self._get_operators()),
             "allowed_fields": sorted(self._get_fields()),
-            "field_semantics": self._get_field_semantics(),
+            "field_semantics": self._compact_field_semantics() if self.compact_context_enabled else self._get_field_semantics(),
             "positive_multi_variable_examples": positive_templates,
-            "positive_context": context.positive,
-            "negative_wq101_context": context.negative,
+            "positive_context": self._compact_examples(context.positive, limit=4) if self.compact_context_enabled else context.positive,
+            "negative_wq101_context": self._compact_examples(context.negative, limit=3) if self.compact_context_enabled else context.negative,
             "failure_patterns_to_avoid": [p["reason"] for p in getattr(context, "failure_patterns", [])],
             "strategy_stats": getattr(context, "strategy_stats", {}),
         })
@@ -314,7 +380,7 @@ class HypothesisAgent:
             "messages": [
                 {
                     "role": "system",
-                    "content": (PACKAGE_ROOT / "prompts" / "system_generation.txt").read_text(encoding="utf-8"),
+                    "content": self._system_prompt(is_repair),
                 },
                 {
                     "role": "user",
@@ -327,6 +393,138 @@ class HypothesisAgent:
             "response_format": "strict_json_candidates_v1",
             "seed": 42,
         }
+
+    @classmethod
+    def _system_prompt(cls, is_repair: bool) -> str:
+        cache_key = "repair" if is_repair else "generate"
+        if cache_key in cls._system_prompt_cache:
+            return cls._system_prompt_cache[cache_key]
+        text = (PACKAGE_ROOT / "prompts" / "system_generation.txt").read_text(encoding="utf-8")
+        if not is_repair:
+            start = text.find('REPAIR MODE (when user input contains "mode":"repair")')
+            end = text.find("ALLOWED OPERATORS (use ONLY these)")
+            if start != -1 and end != -1 and end > start:
+                text = text[:start] + text[end:]
+        cls._system_prompt_cache[cache_key] = text
+        return text
+
+    def _compact_examples(self, examples: list[dict[str, Any]], limit: int = 4) -> list[dict[str, Any]]:
+        compact: list[dict[str, Any]] = []
+        for item in examples[:limit]:
+            compact.append(
+                {
+                    "id": item.get("id"),
+                    "category": item.get("category"),
+                    "expression": item.get("expression"),
+                    "hypothesis": item.get("hypothesis"),
+                    "is_negative_example": bool(item.get("is_negative_example", False)),
+                }
+            )
+        return compact
+
+    def _compact_field_semantics(self) -> dict[str, str]:
+        compact = {}
+        verified_fields = set(self._get_fields())
+        for key, text in self._get_field_semantics().items():
+            if key not in verified_fields:
+                continue
+            compact[key] = text.split(";")[0].split("—")[0].strip() or text
+        return compact
+
+    def _should_escalate_repair_agent(self, repair_context: dict | None) -> bool:
+        if not repair_context:
+            return False
+        depth = int(repair_context.get("repairDepth") or 0)
+        failed_checks = [str(item).upper() for item in (repair_context.get("failedChecks") or [])]
+        complex_failures = {"SELF_CORRELATION", "ORTHOGONALITY", "LOW_SUB_UNIVERSE_SHARPE"}
+        return depth >= self.repair_agent_escalation_after or any(check in complex_failures for check in failed_checks)
+
+    def _rule_based_repair_candidates(self, repair_context: dict | None, category: str, n: int) -> list[Candidate]:
+        if not repair_context:
+            return []
+        parent_expr = str(repair_context.get("expression") or "").strip()
+        if not parent_expr:
+            return []
+        failed_checks = {str(item).upper() for item in (repair_context.get("failedChecks") or [])}
+        repair_depth = int(repair_context.get("repairDepth") or 0)
+        gate_reasons = [str(item or "") for item in (repair_context.get("gate", {}).get("reasons") or [])]
+        variants: list[tuple[str, str, str]] = []
+
+        def add_variant(name: str, hypothesis: str, expression: str) -> None:
+            variants.append((name, hypothesis, expression))
+
+        def is_outer_group_rank(expression: str, group_field: str) -> bool:
+            normalized = re.sub(r"\s+", "", expression)
+            return normalized.startswith("group_rank(") and normalized.endswith(f",{group_field})")
+
+        if repair_depth > 0 or any("daily pnl" in reason.lower() for reason in gate_reasons):
+            add_variant(
+                "rule_recursive_material_escape",
+                "Recursive repair: move to a broader peer-relative hybrid with a new field family and finer peer grouping.",
+                "group_rank(ts_rank(cashflow_op / assets, 252) + ts_rank(volume / adv20, 63), subindustry)",
+            )
+
+        if "HIGH_TURNOVER" in failed_checks or "TURNOVER" in failed_checks:
+            add_variant(
+                "rule_turnover_smooth",
+                "Smooth the fastest component to reduce turnover while retaining signal direction.",
+                f"rank(ts_mean({parent_expr}, 20))",
+            )
+        if {"SELF_CORRELATION", "ORTHOGONALITY"} & failed_checks:
+            add_variant(
+                "rule_cross_family_escape",
+                "Materially change mechanism to escape self-correlation/crowding failure.",
+                "rank(ts_delta(volume, 20)) * rank(-returns)",
+            )
+        if "LOW_SUB_UNIVERSE_SHARPE" in failed_checks:
+            add_variant(
+                "rule_subindustry_peer",
+                "Use finer peer comparison to improve sub-universe stability.",
+                f"group_rank({parent_expr}, subindustry)",
+            )
+        if "CONCENTRATED_WEIGHT" in failed_checks:
+            add_variant(
+                "rule_outer_rank",
+                "Apply outer rank transform to reduce concentrated weights.",
+                f"rank({parent_expr})",
+            )
+
+        if not is_outer_group_rank(parent_expr, "industry"):
+            add_variant(
+                "rule_peer_neutralized",
+                "Peer-neutralized repair to improve robustness without changing economic thesis.",
+                f"group_rank({parent_expr}, industry)",
+            )
+        if {"LOW_SHARPE", "SHARPE", "LOW_FITNESS", "FITNESS"} & failed_checks:
+            add_variant(
+                "rule_strength_blend",
+                "Blend parent expression with an independent quality anchor to lift signal strength.",
+                f"rank({parent_expr} + ts_rank(cashflow_op / assets, 252))",
+            )
+
+        seen: set[str] = set()
+        candidates: list[Candidate] = []
+        from alpha_miner.modules.m3_validator import ExpressionValidator
+        validator = ExpressionValidator(max_depth=8, max_complexity=128)
+        for idx, (name, hypo, expr) in enumerate(variants):
+            expr = expr.strip()
+            if not expr or expr in seen:
+                continue
+            if not validator.validate(expr).is_valid:
+                continue
+            seen.add(expr)
+            candidates.append(
+                Candidate(
+                    id=f"repair_rule_{idx:03d}",
+                    category=category,
+                    hypothesis=hypo,
+                    expression=expr,
+                    origin_refs=["rule_repair", name],
+                )
+            )
+            if len(candidates) >= n:
+                break
+        return candidates
 
     @staticmethod
     def _extract_json(raw: str) -> dict[str, Any]:
@@ -454,29 +652,35 @@ class HypothesisAgent:
         return raw, ti, to, latency
 
     def _deterministic_candidates(self, objective: str, category: str, n: int) -> list[Candidate]:
-        # Collect templates from target category first, then others to ensure uniqueness
-        primary = _templates_for_category(category)
-        all_templates: list[tuple[str, str, str]] = [(expr, hyp, category) for expr, hyp in primary]
-        for cat, pairs in _ALL_TEMPLATES.items():
-            if cat != category:
-                for expr, hyp in pairs:
-                    all_templates.append((expr, hyp, cat))
+        ordered_categories = [category, *[cat for cat in _ALL_TEMPLATES if cat != category]]
+        category_offsets = {cat: 0 for cat in ordered_categories}
         seen: set[str] = set()
         candidates = []
-        for expr, hyp, cat in all_templates:
-            if expr in seen:
-                continue
-            seen.add(expr)
-            candidates.append(
-                Candidate(
-                    id=f"{cat.lower()}_{len(candidates):03d}",
-                    category=cat,
-                    hypothesis=f"{hyp} Objective: {objective}",
-                    expression=expr,
-                    origin_refs=["taxonomy", "wq101_negative_examples"],
+        while len(candidates) < n:
+            progressed = False
+            for cat in ordered_categories:
+                templates = _templates_for_category(cat)
+                offset = category_offsets[cat]
+                if offset >= len(templates):
+                    continue
+                expr, hyp = templates[offset]
+                category_offsets[cat] += 1
+                progressed = True
+                if expr in seen:
+                    continue
+                seen.add(expr)
+                candidates.append(
+                    Candidate(
+                        id=f"{cat.lower()}_{len(candidates):03d}",
+                        category=cat,
+                        hypothesis=f"{hyp} Objective: {objective}",
+                        expression=expr,
+                        origin_refs=["taxonomy", "wq101_negative_examples"],
+                    )
                 )
-            )
-            if len(candidates) >= n:
+                if len(candidates) >= n:
+                    break
+            if not progressed:
                 break
         return candidates
 
@@ -599,7 +803,7 @@ def _repair_instructions(failed_checks: list[str]) -> str:
     if checks & {"HIGH_TURNOVER", "TURNOVER"}:
         parts.append(
             "HIGH_TURNOVER fix: replace ts_delta(x,d<10) with ts_mean(x,21) or ts_rank(x,60); "
-            "wrap volatile sub-expressions in ts_mean(x,10); use delay(x,1) on fast signals."
+            "wrap volatile sub-expressions in ts_mean(x,10); smooth fast signals instead of adding unsupported operators."
         )
     if checks & {"LOW_TURNOVER"}:
         parts.append(

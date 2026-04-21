@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from .common import append_jsonl, sha256_json, write_json
+from .operator_constraints import extract_unsupported_operator, persist_blocked_operator
 
 
 API_ROOT = "https://api.worldquantbrain.com"
@@ -139,11 +140,13 @@ class BrainBacktester:
             write_json(snapshot_path, snapshot)
             raise QuotaWaiting("BRAIN returned HTTP 429 while submitting simulation.")
         if status >= 400:
+            self._record_operator_constraint(response_body, expression=expression, stage="submit_failed_http")
             snapshot["status"] = f"failed_http_{status}"
             write_json(snapshot_path, snapshot)
             return BacktestResult(None, expression, period, snapshot["status"], None, None, None, None, None, str(snapshot_path), simulation_id)
 
         poll_payload = self._poll_simulation(cookie, headers.get("Location") or (f"/simulations/{simulation_id}" if simulation_id else None))
+        self._record_operator_constraint(poll_payload, expression=expression, stage="poll")
         alpha_id = poll_payload.get("alpha") if isinstance(poll_payload, dict) else None
         alpha_payload = self.get_alpha(alpha_id, cookie=cookie) if isinstance(alpha_id, str) else None
         snapshot.update({"poll": poll_payload, "alpha": alpha_payload})
@@ -231,6 +234,34 @@ class BrainBacktester:
         write_json(raw_path, {"status": status, "headers": headers, "payload": payload, "max_abs_correlation": max_corr, "passed": passed})
         append_jsonl(self.progress_path, {"stage": "brain_check", "alpha_id": alpha_id, "max_abs_correlation": max_corr, "passed": passed})
         return BrainCheckResult(alpha_id, "completed" if status < 400 else f"failed_http_{status}", passed, max_corr, str(raw_path))
+
+    def _record_operator_constraint(self, payload: Any, *, expression: str, stage: str) -> None:
+        message = self._payload_message(payload)
+        operator = extract_unsupported_operator(message)
+        if not operator:
+            return
+        persist_blocked_operator(operator, message)
+        append_jsonl(
+            self.progress_path,
+            {
+                "at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "stage": "operator_blocked",
+                "operator": operator,
+                "reason": message,
+                "expression": expression,
+                "source_stage": stage,
+            },
+        )
+
+    @staticmethod
+    def _payload_message(payload: Any) -> str:
+        if isinstance(payload, dict):
+            for key in ("detail", "message", "error"):
+                value = payload.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+            return json.dumps(payload, ensure_ascii=False)
+        return str(payload or "")
 
     def _authenticate(self) -> str:
         # Fast path: valid cookie already cached (no lock needed for read)

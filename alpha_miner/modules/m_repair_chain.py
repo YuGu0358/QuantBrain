@@ -1,17 +1,27 @@
 """LangChain Tool-calling Agent for alpha factor repair.
 
 The agent autonomously decides which tools to call and in what order:
-  diagnose_alpha → retrieve_repair_memory → generate_repair_variants → validate_expression
+  diagnose_alpha → analyze_factor_logic → retrieve_logic_patterns →
+  retrieve_repair_memory → generate_repair_variants → validate_expression
 """
 from __future__ import annotations
 
 import json
 import re
+import time
 from typing import Any
 
 import numpy as np
 
 from alpha_miner.modules.m_repair_memory import RepairMemory
+from alpha_miner.modules.m_repair_intelligence import (
+    analyze_math_profile,
+    build_recursive_repair_guidance,
+    compare_repair,
+    derive_symptom_tags,
+    infer_economic_profile,
+    score_repair_outcome,
+)
 
 # ---------------------------------------------------------------------------
 # System prompt
@@ -42,20 +52,37 @@ REPAIR PRINCIPLES:
   * Never over-smooth a signal just to reduce turnover below 20%.
 - high_turnover (>70%): ts_decay_linear(x, 10-15) or ts_mean(x, 21) on the fastest sub-expression
 - high_corrlib: change primary data field or time horizon entirely; use regression_neut()
+- no_daily_pnl / degraded_no_daily_pnl: treat this as a platform-level fragility signal.
+  Prefer broader-coverage rank-based blends, transparent economic anchors, and simpler
+  structures that should survive degraded evaluation. Avoid fragile micro-tuning.
+- recursive repair (depth >= 1): pure window tuning is not enough. Change at least one of:
+  primary field family, dominant structure, or peer grouping granularity.
 
 WORKFLOW (follow this order):
 1. Call diagnose_alpha to understand the failure
-2. Call retrieve_repair_memory to learn from past repairs
-3. Call generate_repair_variants to create candidates
-4. Call validate_expression for the best candidate
-5. Return your final answer as JSON ONLY — no other text:
+2. Call analyze_factor_logic to extract mathematical structure and economic thesis
+3. Call retrieve_logic_patterns to learn which math/economic repair deltas worked or failed
+4. Call retrieve_repair_memory for legacy successful/failed repair directions
+5. Call generate_repair_variants to create candidates
+6. Call validate_expression for the best candidate
+7. Return your final answer as JSON ONLY — no other text:
 {
   "diagnosis": {"primary_symptom": "<symptom>", "root_cause": "<cause>"},
   "candidates": [
-    {"expression": "<valid BRAIN expr>", "hypothesis": "<economic logic>", "fix_applied": "<what changed>"}
+    {
+      "expression": "<valid BRAIN expr>",
+      "hypothesis": "<economic logic>",
+      "fix_applied": "<what changed>",
+      "math_logic": "<mathematical repair rationale>",
+      "economic_logic": "<economic thesis preserved or changed>",
+      "expected_failure_reduction": "<which failed check should improve and why>"
+    }
   ]
 }
 The "candidates" array must contain EXACTLY ONE entry — your single most confident repair."""
+
+
+DEFAULT_REPAIR_CHAIN_MODEL = "gpt-5.4-2026-03-05"
 
 
 # ---------------------------------------------------------------------------
@@ -65,6 +92,39 @@ The "candidates" array must contain EXACTLY ONE entry — your single most confi
 def build_tools(memory: RepairMemory, embeddings: Any, validator: Any) -> list:
     """Build LangChain tools with injected dependencies."""
     from langchain_core.tools import tool
+    blocked_operators = sorted(str(item) for item in getattr(validator, "blocked_operators", []) if str(item))
+
+    @tool
+    def analyze_factor_logic(expression: str, category: str = "") -> str:
+        """Analyze mathematical structure and economic logic of a BRAIN alpha expression.
+        Args:
+            expression: The BRAIN alpha expression
+            category: Optional factor category hint
+        Returns JSON with math_profile and economic_profile.
+        """
+        try:
+            math_profile = analyze_math_profile(expression)
+            economic_profile = infer_economic_profile(
+                expression,
+                category=category,
+                fields=math_profile.get("fields", []),
+            )
+            return json.dumps(
+                {
+                    "math_profile": math_profile,
+                    "economic_profile": economic_profile,
+                },
+                ensure_ascii=False,
+            )
+        except Exception as exc:
+            return json.dumps(
+                {
+                    "error": str(exc),
+                    "math_profile": analyze_math_profile(""),
+                    "economic_profile": infer_economic_profile("", category=category),
+                },
+                ensure_ascii=False,
+            )
 
     @tool
     def diagnose_alpha(expression: str, sharpe: str, fitness: str, turnover: str, failed_checks: str) -> str:
@@ -170,6 +230,55 @@ def build_tools(memory: RepairMemory, embeddings: Any, validator: Any) -> list:
             return f"Retrieval error: {exc}"
 
     @tool
+    def retrieve_logic_patterns(expression: str, symptoms: str, category: str = "", k: Any = "5") -> str:
+        """Search repair memory for math/economic repair patterns relevant to this expression.
+        Args:
+            expression: The failing expression
+            symptoms: Comma-separated symptom names
+            category: Optional factor category hint
+            k: Number of patterns to retrieve
+        Returns concise successful and failed structured repair patterns.
+        """
+        try:
+            symptom_tags = [c.strip() for c in symptoms.split(",") if c.strip()]
+            math_profile = analyze_math_profile(expression)
+            economic_profile = infer_economic_profile(
+                expression,
+                category=category,
+                fields=math_profile.get("fields", []),
+            )
+            k_limit = max(1, int(k or "5"))
+            retrieval = memory.retrieve(
+                symptom_tags,
+                expression,
+                family_tag=category or None,
+                topk=k_limit,
+                math_profile=math_profile,
+                economic_profile=economic_profile,
+            )
+            lines: list[str] = []
+            for label, records in (("SUCCESS", retrieval.get("positive", [])), ("FAILED", retrieval.get("negative", []))):
+                for i, record in enumerate(records[:k_limit], 1):
+                    delta = record.get("repair_delta") if isinstance(record.get("repair_delta"), dict) else {}
+                    actions = delta.get("actions") or [
+                        key for key, enabled in delta.items() if isinstance(enabled, bool) and enabled
+                    ]
+                    theme = (record.get("economic_profile") or {}).get("theme") if isinstance(record.get("economic_profile"), dict) else ""
+                    score = record.get("outcome_score", 0.0)
+                    platform = ""
+                    if isinstance(record.get("platform_outcome"), dict):
+                        platform = str(record.get("platform_outcome", {}).get("outcome") or record.get("platform_outcome", {}).get("status") or "")
+                    expr = (record.get("expression") or "")[:80]
+                    lines.append(
+                        f"{i}. [{label}] {expr} | theme={theme or '?'} | "
+                        f"actions={','.join(str(a) for a in actions) or '?'} | "
+                        f"platform={platform or '?'} | score={score}"
+                    )
+            return "\n".join(lines) if lines else "No structured logic patterns found."
+        except Exception as exc:
+            return f"Structured retrieval error: {exc}"
+
+    @tool
     def validate_expression(expression: str) -> str:
         """Validate a BRAIN alpha expression for syntax correctness.
         Args:
@@ -180,19 +289,33 @@ def build_tools(memory: RepairMemory, embeddings: Any, validator: Any) -> list:
             return "VALID (validator not available)"
         try:
             result = validator.validate(expression)
-            if result.is_valid:
+            valid_attr = getattr(result, "valid", None)
+            if isinstance(valid_attr, bool):
+                is_valid = valid_attr
+            else:
+                is_valid_attr = getattr(result, "is_valid", False)
+                is_valid = bool(is_valid_attr) if isinstance(is_valid_attr, bool) else False
+            if is_valid:
                 return "VALID"
             return f"INVALID: {'; '.join(result.errors)}"
         except Exception as exc:
             return f"INVALID: {exc}"
 
     @tool
-    def generate_repair_variants(expression: str, diagnosis_json: str, memory_context: str) -> str:
+    def generate_repair_variants(
+        expression: str,
+        diagnosis_json: str,
+        memory_context: str,
+        logic_json: str = "",
+        logic_patterns: str = "",
+    ) -> str:
         """Generate the single best repair for a failing expression.
         Args:
             expression: The original failing BRAIN expression
             diagnosis_json: JSON string from diagnose_alpha tool
             memory_context: Context string from retrieve_repair_memory tool
+            logic_json: JSON string from analyze_factor_logic
+            logic_patterns: Structured repair patterns from retrieve_logic_patterns
         Returns JSON array with exactly one candidate: expression, hypothesis, fix_applied.
         """
         # This tool returns a structured prompt for the LLM to fill in.
@@ -205,19 +328,35 @@ def build_tools(memory: RepairMemory, embeddings: Any, validator: Any) -> list:
         symptom = diag.get("primary_symptom", "low_sharpe")
         strategy = diag.get("repair_strategy", "improve signal construction")
         do_not_change = diag.get("do_not_change", [])
+        try:
+            logic = json.loads(logic_json) if logic_json else {}
+        except Exception:
+            logic = {}
 
         hint = (
             f"Parent expression: {expression}\n"
             f"Symptom: {symptom}\n"
             f"Strategy: {strategy}\n"
             f"Preserve: {', '.join(do_not_change) or 'nothing specific'}\n"
+            f"Blocked operators for this account: {', '.join(blocked_operators) if blocked_operators else 'none'}\n"
+            f"Math profile: {json.dumps(logic.get('math_profile', {}), ensure_ascii=False)}\n"
+            f"Economic profile: {json.dumps(logic.get('economic_profile', {}), ensure_ascii=False)}\n"
+            f"Structured logic patterns:\n{logic_patterns or 'No structured logic patterns provided.'}\n"
             f"Memory context:\n{memory_context}\n\n"
             f"Generate EXACTLY 1 repair — your single most confident fix — as a JSON array with one item:\n"
-            '[\n  {"expression": "...", "hypothesis": "...", "fix_applied": "..."}\n]'
+            '[\n  {"expression": "...", "hypothesis": "...", "fix_applied": "...", '
+            '"math_logic": "...", "economic_logic": "...", "expected_failure_reduction": "..."}\n]'
         )
         return hint
 
-    return [diagnose_alpha, retrieve_repair_memory, validate_expression, generate_repair_variants]
+    return [
+        analyze_factor_logic,
+        diagnose_alpha,
+        retrieve_repair_memory,
+        retrieve_logic_patterns,
+        validate_expression,
+        generate_repair_variants,
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -237,7 +376,7 @@ class RepairChain:
         self,
         memory: RepairMemory,
         api_key: str = "",
-        model_id: str = "claude-opus-4-6",
+        model_id: str = DEFAULT_REPAIR_CHAIN_MODEL,
         temperature: float = 0.7,
         openai_api_key: str = "",
         **kwargs: Any,
@@ -248,6 +387,7 @@ class RepairChain:
         self._openai_key = openai_api_key
         self._temperature = temperature
         self._embeddings = None
+        self.last_usage: dict[str, float | int] = {"input_tokens": 0, "output_tokens": 0, "latency_ms": 0.0, "calls": 0}
 
     @property
     def _is_claude(self) -> bool:
@@ -288,23 +428,49 @@ class RepairChain:
         llm_with_tools = llm.bind_tools(tools)
         return llm_with_tools, tools, tool_map
 
-    def _run_tool_loop(self, llm_with_tools: Any, tool_map: dict, user_input: str, max_iterations: int = 8) -> str:
-        """Manual tool-calling loop compatible with LangChain 1.x. Returns final text output."""
+    def _run_tool_loop(
+        self,
+        llm_with_tools: Any,
+        tool_map: dict,
+        user_input: str,
+        max_iterations: int = 8,
+    ) -> tuple[str, dict[str, float | int]]:
+        """Manual tool-calling loop compatible with LangChain 1.x."""
         from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage, AIMessage
 
         messages: list[Any] = [
             SystemMessage(content=_SYSTEM_PROMPT),
             HumanMessage(content=user_input),
         ]
+        usage = {"input_tokens": 0, "output_tokens": 0, "latency_ms": 0.0, "calls": 0}
+        json_retry_budget = 1
 
         for iteration in range(max_iterations):
+            t0 = time.time()
             response = llm_with_tools.invoke(messages)
+            usage["latency_ms"] += (time.time() - t0) * 1000
+            usage["calls"] += 1
+            in_tokens, out_tokens = _extract_usage_metadata(response)
+            usage["input_tokens"] += in_tokens
+            usage["output_tokens"] += out_tokens
             messages.append(response)
 
             tool_calls = getattr(response, "tool_calls", None) or []
             if not tool_calls:
-                # No more tool calls — this is the final answer
-                return response.content or ""
+                output_text = _coerce_agent_output_text(response)
+                probe_candidates, _probe_diagnosis = _parse_agent_output(output_text, "probe")
+                if probe_candidates or json_retry_budget <= 0 or iteration >= max_iterations - 1:
+                    return output_text, usage
+                messages.append(
+                    HumanMessage(
+                        content=(
+                            "Return ONLY valid JSON matching the required schema with EXACTLY ONE candidate. "
+                            "No prose, no markdown fences, no explanation."
+                        )
+                    )
+                )
+                json_retry_budget -= 1
+                continue
 
             # Execute each requested tool
             for tc in tool_calls:
@@ -324,8 +490,8 @@ class RepairChain:
         # Exceeded max_iterations — return last AI message content if any
         for msg in reversed(messages):
             if isinstance(msg, AIMessage) and msg.content:
-                return msg.content
-        return ""
+                return msg.content, usage
+        return "", usage
 
     def run(
         self,
@@ -336,29 +502,45 @@ class RepairChain:
         n: int = 3,
         category: str = "UNKNOWN",
         validator: Any = None,
+        repair_context: dict | None = None,
     ) -> tuple[list[dict], dict]:
         """Run the repair agent. Returns (candidates, diagnosis)."""
         sharpe = metrics.get("sharpe") or metrics.get("isSharpe")
         fitness = metrics.get("fitness") or metrics.get("isFitness")
         turnover = metrics.get("turnover")
+        recursive_guidance = build_recursive_repair_guidance(repair_context)
 
         user_input = (
             f"Repair this failing alpha expression:\n"
             f"Expression: {expression}\n"
+            f"Category: {category}\n"
             f"Sharpe: {sharpe}, Fitness: {fitness}, Turnover: {turnover}\n"
             f"Failed checks: {', '.join(failed_checks) or 'none'}\n"
             f"Gate reasons: {'; '.join(gate_reasons[:3]) or 'none'}\n"
             f"Generate {n} repair variants."
         )
+        if recursive_guidance:
+            user_input += "\n" + "\n".join(recursive_guidance)
 
         try:
+            import os
+
+            self.last_usage = {"input_tokens": 0, "output_tokens": 0, "latency_ms": 0.0, "calls": 0}
             llm_with_tools, tools, tool_map = self._ensure_llm(validator)
-            output = self._run_tool_loop(llm_with_tools, tool_map, user_input)
-            candidates, diagnosis = _parse_agent_output(output, category)
+            max_iterations = max(8, int(os.environ.get("REPAIR_AGENT_MAX_ITERATIONS", "8")))
+            loop_result = self._run_tool_loop(llm_with_tools, tool_map, user_input, max_iterations=max_iterations)
+            if isinstance(loop_result, tuple):
+                output, usage = loop_result
+            else:
+                output = str(loop_result or "")
+                usage = {"input_tokens": 0, "output_tokens": 0, "latency_ms": 0.0, "calls": 0}
+            self.last_usage = usage
+            output_text = _coerce_agent_output_text(output)
+            candidates, diagnosis = _parse_agent_output(output_text, category)
             if candidates:
                 print(f"[repair_agent] generated {len(candidates)} candidates", flush=True)
                 return candidates, diagnosis
-            print(f"[repair_agent] no candidates parsed, output[:200]: {output[:200]}", flush=True)
+            print(f"[repair_agent] no candidates parsed, output[:200]: {output_text[:200]}", flush=True)
         except Exception as exc:
             import traceback
             print(f"[repair_agent] ERROR {type(exc).__name__}: {exc}", flush=True)
@@ -366,21 +548,52 @@ class RepairChain:
 
         return [], {}
 
-    def record_outcome(self, expression: str, diagnosis: dict, candidates: list[dict], accepted: bool) -> None:
+    def record_outcome(
+        self,
+        expression: str,
+        diagnosis: dict,
+        candidates: list[dict],
+        accepted: bool,
+        candidate_metrics: dict | None = None,
+        gate: dict | None = None,
+        platform_outcome: dict | None = None,
+        category: str | None = None,
+    ) -> None:
         """Persist repair outcome to memory and reset FAISS cache."""
-        symptom = diagnosis.get("primary_symptom", "")
+        symptom_tags = derive_symptom_tags(diagnosis, gate=gate, platform_outcome=platform_outcome)
         fix_list = [
             c["origin_refs"][1] for c in candidates
             if len(c.get("origin_refs", [])) > 1 and c["origin_refs"][1]
         ]
+        candidate_expression = next((c.get("expression") for c in candidates if c.get("expression")), expression)
+        math_profile = analyze_math_profile(candidate_expression)
+        economic_profile = infer_economic_profile(
+            candidate_expression,
+            category=category,
+            fields=math_profile.get("fields", []),
+        )
+        repair_delta = compare_repair(expression, candidate_expression)
+        outcome_score = score_repair_outcome(
+            candidate_metrics,
+            gate=gate,
+            accepted=accepted,
+            platform_outcome=platform_outcome,
+        )
         self.memory.add_record({
             "expression": expression,
-            "symptom_tags": [symptom] if symptom else [],
+            "symptom_tags": symptom_tags,
             "repair_actions": fix_list,
             "accept_decision": "accepted" if accepted else "rejected",
             "recommended_directions": fix_list if accepted else [],
             "forbidden_directions": fix_list if not accepted else [],
-            "family_tag": "",
+            "metrics": candidate_metrics or {},
+            "family_tag": category or "",
+            "notes": "; ".join(build_recursive_repair_guidance(platform_outcome)),
+            "math_profile": math_profile,
+            "economic_profile": economic_profile,
+            "repair_delta": repair_delta,
+            "outcome_score": outcome_score,
+            "platform_outcome": platform_outcome or {},
         })
         # Reset embeddings so FAISS index rebuilds on next call
         self._embeddings = None
@@ -390,8 +603,46 @@ class RepairChain:
 # Output parser
 # ---------------------------------------------------------------------------
 
-def _parse_agent_output(output: str, category: str) -> tuple[list[dict], dict]:
+def _coerce_agent_output_text(output: Any) -> str:
+    """Normalize LangChain message content into parseable text.
+
+    ChatAnthropic can return content blocks such as
+    ``[{"type": "text", "text": "..."}]`` instead of a plain string. The
+    repair parser only needs the text blocks; tool-use blocks are ignored.
+    """
+    if output is None:
+        return ""
+    if isinstance(output, str):
+        return output
+    if isinstance(output, bytes):
+        return output.decode("utf-8", errors="replace")
+    if isinstance(output, dict):
+        for key in ("text", "content"):
+            value = output.get(key)
+            if isinstance(value, (str, bytes, list, dict)):
+                return _coerce_agent_output_text(value)
+        if "candidates" in output or "diagnosis" in output:
+            return json.dumps(output)
+        return ""
+    if isinstance(output, list):
+        parts = []
+        for item in output:
+            text = _coerce_agent_output_text(item)
+            if text:
+                parts.append(text)
+        return "\n".join(parts)
+    content = getattr(output, "content", None)
+    if content is not None:
+        return _coerce_agent_output_text(content)
+    text = getattr(output, "text", None)
+    if text is not None:
+        return _coerce_agent_output_text(text)
+    return str(output)
+
+
+def _parse_agent_output(output: Any, category: str) -> tuple[list[dict], dict]:
     """Extract candidates and diagnosis from agent final answer."""
+    output = _coerce_agent_output_text(output)
     # Try to find JSON block
     json_match = re.search(r'\{[\s\S]*"candidates"[\s\S]*\}', output)
     if json_match:
@@ -406,6 +657,7 @@ def _parse_agent_output(output: str, category: str) -> tuple[list[dict], dict]:
                     "hypothesis": item.get("hypothesis", ""),
                     "expression": item.get("expression", ""),
                     "origin_refs": ["langchain_agent", item.get("fix_applied", "")],
+                    "metadata": _candidate_metadata(item),
                     "opt_rounds": 0,
                 }
                 for i, item in enumerate(raw_candidates)
@@ -427,6 +679,7 @@ def _parse_agent_output(output: str, category: str) -> tuple[list[dict], dict]:
                     "hypothesis": item.get("hypothesis", ""),
                     "expression": item.get("expression", ""),
                     "origin_refs": ["langchain_agent", item.get("fix_applied", "")],
+                    "metadata": _candidate_metadata(item),
                     "opt_rounds": 0,
                 }
                 for i, item in enumerate(raw_candidates)
@@ -439,4 +692,35 @@ def _parse_agent_output(output: str, category: str) -> tuple[list[dict], dict]:
     return [], {}
 
 
+def _candidate_metadata(item: dict[str, Any]) -> dict[str, str]:
+    metadata = {}
+    for key in ("math_logic", "economic_logic", "expected_failure_reduction"):
+        value = item.get(key)
+        if value not in (None, ""):
+            metadata[key] = str(value)
+    return metadata
+
+
 __all__ = ["RepairChain"]
+
+
+def _extract_usage_metadata(response: Any) -> tuple[int, int]:
+    usage = getattr(response, "usage_metadata", None)
+    if isinstance(usage, dict):
+        in_tokens = int(usage.get("input_tokens") or usage.get("prompt_tokens") or 0)
+        out_tokens = int(usage.get("output_tokens") or usage.get("completion_tokens") or 0)
+        return in_tokens, out_tokens
+
+    metadata = getattr(response, "response_metadata", None)
+    if isinstance(metadata, dict):
+        usage_meta = metadata.get("usage")
+        if isinstance(usage_meta, dict):
+            in_tokens = int(usage_meta.get("input_tokens") or usage_meta.get("prompt_tokens") or 0)
+            out_tokens = int(usage_meta.get("output_tokens") or usage_meta.get("completion_tokens") or 0)
+            return in_tokens, out_tokens
+        token_usage = metadata.get("token_usage")
+        if isinstance(token_usage, dict):
+            in_tokens = int(token_usage.get("prompt_tokens") or token_usage.get("input_tokens") or 0)
+            out_tokens = int(token_usage.get("completion_tokens") or token_usage.get("output_tokens") or 0)
+            return in_tokens, out_tokens
+    return 0, 0

@@ -335,10 +335,12 @@ export function applyPreflight(candidates, memory, plan, context = {}) {
   const history = [...(memory?.trajectories ?? []), ...(memory?.effectivePool ?? []), ...(memory?.deprecatedPool ?? [])];
   const currentPatterns = new Map();
   const currentFamilies = new Map();
+  const currentFieldBundles = new Map();
   return candidates.map((candidate) => {
-    const result = preflightCandidate(candidate, history, plan, currentPatterns, currentFamilies);
+    const result = preflightCandidate(candidate, history, plan, currentPatterns, currentFamilies, currentFieldBundles);
     currentPatterns.set(result.operatorPattern, (currentPatterns.get(result.operatorPattern) ?? 0) + 1);
     currentFamilies.set(candidate.dataFamily, (currentFamilies.get(candidate.dataFamily) ?? 0) + 1);
+    currentFieldBundles.set(result.fieldBundle, (currentFieldBundles.get(result.fieldBundle) ?? 0) + 1);
     return {
       ...candidate,
       operatorPattern: result.operatorPattern,
@@ -356,6 +358,8 @@ export function applyPreflight(candidates, memory, plan, context = {}) {
 
 export function summarizeDiversity(candidates, memory, plan) {
   const familyCounts = countBy(candidates, (candidate) => candidate.dataFamily ?? "UNKNOWN");
+  const fieldBundleCounts = countBy(candidates, (candidate) => fieldBundleKey(candidate));
+  const themeCounts = countBy(candidates, (candidate) => conceptTheme(candidate));
   const submittedFamilyCounts = countBy(
     candidates.filter((candidate) => candidate.preflightStatus?.ok !== false),
     (candidate) => candidate.dataFamily ?? "UNKNOWN",
@@ -381,6 +385,8 @@ export function summarizeDiversity(candidates, memory, plan) {
     crowdingPatternThreshold: plan.crowdingPatternThreshold,
     familyCooldownRounds: plan.familyCooldownRounds,
     familyCounts,
+    fieldBundleCounts,
+    themeCounts,
     submittedFamilyCounts,
     preflightRejections,
     crowdedPatterns,
@@ -778,7 +784,11 @@ function selectParents(memory, plan, limit) {
     .filter((candidate) => plan.preferredFamilies.includes(candidate.family))
     .sort((left, right) => (right.totalScore ?? -Infinity) - (left.totalScore ?? -Infinity));
 
-  return diversifyCandidates(pool, limit).map((candidate) => ({
+  const diversified = plan.generatorStrategy === "diversity-v2"
+    ? diversifyCandidatesByNovelty(pool, limit)
+    : diversifyCandidates(pool, limit);
+
+  return diversified.map((candidate) => ({
     ...candidate,
     id: `${candidate.id}_reuse_${Date.now().toString(36)}`,
     parentIds: [...(candidate.parentIds ?? []), candidate.id],
@@ -872,20 +882,62 @@ function diversifyCandidates(candidates, limit) {
   return selected.slice(0, limit);
 }
 
+function diversifyCandidatesByNovelty(candidates, limit) {
+  const selected = [];
+  const usedFamilies = new Set();
+  const usedSignatures = new Set();
+  const usedBundles = new Set();
+  const usedThemes = new Set();
+
+  for (const candidate of candidates) {
+    const family = candidate.family;
+    const signature = signatureKey(candidate.signature ?? []);
+    const bundle = fieldBundleKey(candidate);
+    const theme = conceptTheme(candidate);
+    if (usedFamilies.has(family) || usedSignatures.has(signature) || usedBundles.has(bundle) || usedThemes.has(theme)) {
+      continue;
+    }
+    selected.push(candidate);
+    usedFamilies.add(family);
+    usedSignatures.add(signature);
+    usedBundles.add(bundle);
+    usedThemes.add(theme);
+    if (selected.length >= limit) return selected;
+  }
+
+  for (const candidate of candidates) {
+    if (selected.length >= limit) break;
+    if (selected.find((item) => item.id === candidate.id)) continue;
+    selected.push(candidate);
+  }
+
+  return selected.slice(0, limit);
+}
+
 function diversifyCandidatesByDataFamily(candidates, limit, memory) {
   const selected = [];
   const usedFamilies = new Set();
+  const usedBundles = new Set();
+  const usedThemes = new Set();
   const ordered = [...candidates].sort((left, right) => {
     const familyDiff = dataFamilyUsage(left.dataFamily, memory) - dataFamilyUsage(right.dataFamily, memory);
     if (familyDiff !== 0) return familyDiff;
+    const bundleDiff = fieldBundleUsage(fieldBundleKey(left), memory) - fieldBundleUsage(fieldBundleKey(right), memory);
+    if (bundleDiff !== 0) return bundleDiff;
+    const themeDiff = themeUsage(conceptTheme(left), memory) - themeUsage(conceptTheme(right), memory);
+    if (themeDiff !== 0) return themeDiff;
     return DATA_FAMILY_ORDER.indexOf(left.dataFamily) - DATA_FAMILY_ORDER.indexOf(right.dataFamily);
   });
 
   for (const candidate of ordered) {
     if (selected.length >= limit) break;
     if (usedFamilies.has(candidate.dataFamily)) continue;
+    if (usedBundles.has(fieldBundleKey(candidate))) continue;
+    if (usedThemes.has(conceptTheme(candidate))) continue;
     selected.push(candidate);
     usedFamilies.add(candidate.dataFamily);
+    usedBundles.add(fieldBundleKey(candidate));
+    usedThemes.add(conceptTheme(candidate));
   }
 
   for (const candidate of ordered) {
@@ -904,10 +956,12 @@ function enabledTemplates(plan) {
 function templateDiversityWeight(template, memory, plan) {
   const familyIndex = DATA_FAMILY_ORDER.indexOf(template.dataFamily);
   const familyPenalty = dataFamilyUsage(template.dataFamily, memory) * 10;
+  const bundlePenalty = fieldBundleUsage(fieldBundleKey(template), memory) * 6;
+  const themePenalty = themeUsage(conceptTheme(template), memory) * 4;
   const pattern = extractOperatorPattern(template.expression);
   const patternPenalty = operatorPatternUsage(pattern, memory) >= plan.crowdingPatternThreshold ? 100 : 0;
   const objectivePenalty = plan.preferredFamilies.includes(template.family) ? 0 : 25;
-  return familyPenalty + patternPenalty + objectivePenalty + (familyIndex < 0 ? 99 : familyIndex);
+  return familyPenalty + bundlePenalty + themePenalty + patternPenalty + objectivePenalty + (familyIndex < 0 ? 99 : familyIndex);
 }
 
 function dataFamilyUsage(dataFamily, memory) {
@@ -919,14 +973,17 @@ function operatorPatternUsage(pattern, memory) {
   return pool.filter((candidate) => (candidate.operatorPattern ?? extractOperatorPattern(candidate.expression)) === pattern).length;
 }
 
-function preflightCandidate(candidate, history, plan, currentPatterns, currentFamilies) {
+function preflightCandidate(candidate, history, plan, currentPatterns, currentFamilies, currentFieldBundles) {
   const reasons = [];
   const expression = String(candidate.expression ?? "");
   const fields = extractDataFields(expression);
+  const fieldBundle = fieldBundleKey(candidate);
   const operators = extractOperators(expression);
   const pattern = candidate.operatorPattern ?? extractOperatorPattern(expression);
   const historicalPatternCount = history.filter((item) => (item.operatorPattern ?? extractOperatorPattern(item.expression)) === pattern).length;
   const currentPatternCount = currentPatterns.get(pattern) ?? 0;
+  const historicalFieldBundleCount = history.filter((item) => fieldBundleKey(item) === fieldBundle).length;
+  const currentFieldBundleCount = currentFieldBundles.get(fieldBundle) ?? 0;
   const familyStreak = recentFamilyStreak(history);
   const currentFamilyCount = currentFamilies.get(candidate.dataFamily) ?? 0;
   const historicalExpressions = new Set(history.map((item) => item.expression).filter(Boolean));
@@ -937,11 +994,14 @@ function preflightCandidate(candidate, history, plan, currentPatterns, currentFa
       reasons: [],
       primaryReason: null,
       dataFields: fields,
+      fieldBundle,
       operators,
       operatorPattern: pattern,
       historicalPatternCount,
+      historicalFieldBundleCount,
       batchPatternCount: currentPatternCount,
       batchFamilyCount: currentFamilyCount,
+      batchFieldBundleCount: currentFieldBundleCount,
       familyStreak,
       crowdingPenalty: 0,
     };
@@ -953,6 +1013,7 @@ function preflightCandidate(candidate, history, plan, currentPatterns, currentFa
   if (maxDepth(expression) > 5) reasons.push("expression-too-deep");
   if (operators.some((operator) => !ALLOWED_OPERATORS.has(operator))) reasons.push("unknown-operator");
   if (historicalPatternCount + currentPatternCount >= plan.crowdingPatternThreshold) reasons.push("crowded-operator-pattern");
+  if (currentFieldBundleCount >= 1) reasons.push("field-bundle-overuse");
   if (
     familyStreak.family === candidate.dataFamily &&
     familyStreak.count >= plan.familyCooldownRounds &&
@@ -970,11 +1031,14 @@ function preflightCandidate(candidate, history, plan, currentPatterns, currentFa
     reasons,
     primaryReason: reasons[0] ?? null,
     dataFields: fields,
+    fieldBundle,
     operators,
     operatorPattern: pattern,
     historicalPatternCount,
+    historicalFieldBundleCount,
     batchPatternCount: currentPatternCount,
     batchFamilyCount: currentFamilyCount,
+    batchFieldBundleCount: currentFieldBundleCount,
     familyStreak,
     crowdingPenalty: round4(Math.min(1, (historicalPatternCount + currentPatternCount) / Math.max(1, plan.crowdingPatternThreshold))),
   };
@@ -1023,6 +1087,36 @@ function extractDataFields(expression) {
     !RESERVED_TOKENS.has(token) &&
     Number.isNaN(Number(token)),
   ))];
+}
+
+function fieldBundleKey(candidateOrExpression) {
+  const expression = typeof candidateOrExpression === "string"
+    ? candidateOrExpression
+    : candidateOrExpression?.expression;
+  const fields = extractDataFields(expression).sort();
+  return fields.join("|") || "NO_FIELDS";
+}
+
+function conceptTheme(candidate) {
+  const family = String(candidate?.family ?? "").toLowerCase();
+  if (family.includes("quality") || family.includes("efficiency")) return "quality";
+  if (family.includes("value")) return "value";
+  if (family.includes("estimate")) return "revision";
+  if (family.includes("microstructure")) return "microstructure";
+  if (family.includes("volatility")) return "volatility";
+  if (family.includes("sentiment")) return "sentiment";
+  if (family.includes("price")) return "price_volume";
+  return String(candidate?.dataFamily ?? "unknown").toLowerCase();
+}
+
+function fieldBundleUsage(bundle, memory) {
+  const pool = [...(memory?.trajectories ?? []), ...(memory?.effectivePool ?? []), ...(memory?.deprecatedPool ?? [])];
+  return pool.filter((candidate) => fieldBundleKey(candidate) === bundle).length;
+}
+
+function themeUsage(theme, memory) {
+  const pool = [...(memory?.trajectories ?? []), ...(memory?.effectivePool ?? []), ...(memory?.deprecatedPool ?? [])];
+  return pool.filter((candidate) => conceptTheme(candidate) === theme).length;
 }
 
 export function extractOperatorPattern(expression) {

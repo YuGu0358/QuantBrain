@@ -28,11 +28,10 @@ _PRICE_FIELDS = ["close", "open", "vwap", "adv20"]
 _RETURN_FIELDS = ["returns"]
 _VOLUME_FIELDS = ["volume", "adv20"]
 _FUNDAMENTAL_FIELDS = [
-    "assets", "cashflow_op", "operating_income", "sales", "net_income",
-    "book_to_price", "earnings_yield", "est_eps",
+    "assets", "cashflow_op", "operating_income", "est_eps",
 ]
-_SENTIMENT_FIELDS = ["analyst_rating", "short_interest"]
-_MICRO_FIELDS = ["bid_ask_spread", "amihud", "vwap"]
+_SENTIMENT_FIELDS = ["news_sentiment"]
+_MICRO_FIELDS = ["adv20", "vwap"]
 
 # Long lookback windows preferred for IS/OOS robustness
 # Fitness-first window selection: avoid sub-21 windows except inside decay wrappers
@@ -108,17 +107,15 @@ _SKELETONS: list[Skeleton] = [
         name="momentum_52w_high_proximity",
         category="MOMENTUM",
         template=(
-            "group_rank(divide(ts_mean({field}, {d_short}), "
-            "ts_max({field}, {d_long})), {neut})"
+            "group_rank(multiply(-1, ts_arg_max({field}, {d_long})), {neut})"
         ),
         hypothesis=(
-            "Proximity to the {d_long}-day high is a well-documented momentum "
-            "predictor. Normalizing by current price smoothed over {d_short} days "
-            "reduces microstructure noise. sector-neutral version strips macro moves."
+            "Recent proximity to the {d_long}-day high is a well-documented momentum "
+            "predictor. ts_arg_max counts how recently the high occurred; multiplying "
+            "by -1 rewards fresher highs while sector-neutral ranking strips macro moves."
         ),
         params={
             "field": ["close", "vwap"],
-            "d_short": [5, 10],
             "d_long": [126, 252],
             "neut": _NEUTRALIZATIONS,
         },
@@ -136,7 +133,7 @@ _SKELETONS: list[Skeleton] = [
             "Quarterly-updating fundamental data is naturally slow-moving and robust."
         ),
         params={
-            "fund_field": ["cashflow_op", "book_to_price", "earnings_yield", "est_eps"],
+            "fund_field": ["cashflow_op", "operating_income", "est_eps", "assets"],
             "window": [63, 126],
             "neut": _NEUTRALIZATIONS,
         },
@@ -178,7 +175,7 @@ _SKELETONS: list[Skeleton] = [
             "carry less risk and often generate persistent alpha."
         ),
         params={
-            "fund_field": ["cashflow_op", "operating_income", "net_income"],
+            "fund_field": ["cashflow_op", "operating_income", "est_eps"],
             "d_long": [126, 252],
             "neut": _NEUTRALIZATIONS,
         },
@@ -196,7 +193,7 @@ _SKELETONS: list[Skeleton] = [
             "industry-wide accounting changes."
         ),
         params={
-            "fund_accrual": ["assets", "net_income", "sales"],
+            "fund_accrual": ["assets", "cashflow_op", "operating_income"],
             "d_delta": [63, 126],
             "neut": _NEUTRALIZATIONS,
         },
@@ -260,7 +257,7 @@ _SKELETONS: list[Skeleton] = [
             "Sector-neutral version isolates stock-specific growth acceleration."
         ),
         params={
-            "fund_field": ["est_eps", "operating_income", "cashflow_op", "sales"],
+            "fund_field": ["est_eps", "operating_income", "cashflow_op", "assets"],
             "d_short": [21, 42],
             "d_long": [63, 126],
             "neut": _NEUTRALIZATIONS,
@@ -303,7 +300,7 @@ _SKELETONS: list[Skeleton] = [
         ),
         params={
             "price_field": ["returns", "close"],
-            "fund_field": ["book_to_price", "earnings_yield", "cashflow_op"],
+            "fund_field": ["cashflow_op", "operating_income", "est_eps"],
             "d_mom": [42, 63],
             "d_val": [126],
             "neut": _NEUTRALIZATIONS,

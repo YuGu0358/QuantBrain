@@ -83,6 +83,23 @@ def test_planner_family_saturated_zeroes_template():
     assert sum(plan.candidate_mix.values()) == 10
 
 
+def test_planner_theme_and_math_saturation_pushes_structural_repairs():
+    p = Planner(router=None)
+    plan = p.plan(
+        _diagnosis("high_turnover"),
+        {
+            "theme_saturated": True,
+            "math_saturated": True,
+            "family_saturated": True,
+        },
+        total_budget=10,
+    )
+    assert plan.candidate_mix["template_retrieval"] == 0
+    assert plan.candidate_mix["struct_mutation"] >= plan.candidate_mix["param_tune"]
+    assert plan.candidate_mix["llm_mutation"] >= 2
+    assert sum(plan.candidate_mix.values()) == 10
+
+
 def test_planner_scheduler_weights_respected():
     p = Planner(router=None)
     weights = {"param_tune": 0.8, "struct_mutation": 0.1, "template_retrieval": 0.05, "llm_mutation": 0.05}

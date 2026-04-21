@@ -9,6 +9,7 @@ from alpha_miner.modules.m_factor_factory import (
     enumerate_skeletons,
     get_skeletons,
 )
+from alpha_miner.modules.m3_validator import ExpressionValidator
 
 
 # ---------------------------------------------------------------------------
@@ -145,3 +146,29 @@ def test_enumerate_skeletons_ids_are_unique():
     candidates = enumerate_skeletons(n=40, seed=42)
     ids = [c["id"] for c in candidates]
     assert len(ids) == len(set(ids)), "Duplicate IDs found"
+
+
+def test_enumerate_skeletons_validates_for_default_profile_representative_categories():
+    validator = ExpressionValidator()
+    for category in ["MOMENTUM", "VALUE", "QUALITY", "REVERSAL", "GROWTH"]:
+        candidates = enumerate_skeletons(category=category, n=12, seed=17)
+        assert candidates, f"{category} should produce candidates"
+        for candidate in candidates:
+            result = validator.validate(candidate["expression"])
+            assert result.is_valid, (
+                f"{category} candidate failed validation: {candidate['expression']} "
+                f"errors={result.errors}"
+            )
+
+
+def test_no_factor_factory_skeleton_references_unverified_fields_or_operators():
+    validator = ExpressionValidator(max_complexity=999)
+    for skeleton in get_skeletons():
+        candidates = enumerate_skeleton(skeleton, max_per_skeleton=10_000)
+        assert candidates, f"{skeleton.name} should enumerate at least one candidate"
+        for candidate in candidates:
+            result = validator.validate(candidate["expression"])
+            assert result.is_valid, (
+                f"{skeleton.name} references unverified symbols in "
+                f"{candidate['expression']}: {result.errors}"
+            )

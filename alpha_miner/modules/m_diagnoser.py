@@ -49,7 +49,9 @@ class Diagnoser:
 
         provider = None
         try:
-            provider = _pick_provider(self.router, "repair")
+            primary_role = os.environ.get("DIAGNOSE_LLM_ROLE", "diagnose")
+            fallback_role = os.environ.get("DIAGNOSE_FALLBACK_ROLE", "repair")
+            provider = _pick_provider(self.router, primary_role, fallback_role)
             if provider is None:
                 raise RuntimeError("No LLM provider available")
             raw, tokens_in, tokens_out, latency_ms = _invoke_provider(self, self.router, provider, request_payload)
@@ -60,6 +62,18 @@ class Diagnoser:
         except Exception as exc:
             if provider is not None:
                 _record_result(self.router, provider, False, 0.0, 0, 0)
+            # One-shot high-quality fallback retry when lightweight diagnose fails.
+            if provider is not None and fallback_role and provider.role != fallback_role:
+                hq_provider = _pick_provider(self.router, fallback_role)
+                if hq_provider is not None:
+                    try:
+                        raw, tokens_in, tokens_out, latency_ms = _invoke_provider(self, self.router, hq_provider, request_payload)
+                        parsed = _extract_json(raw)
+                        report = _report_from_mapping(parsed)
+                        _record_result(self.router, hq_provider, True, latency_ms, tokens_in, tokens_out)
+                        return report
+                    except Exception:
+                        _record_result(self.router, hq_provider, False, 0.0, 0, 0)
             return _fallback_report(
                 expression=expression,
                 metrics=enriched_metrics,
@@ -295,13 +309,18 @@ def _preservation_hints(expression: str) -> list[str]:
     return hints
 
 
-def _pick_provider(router: Any, role: str) -> Any | None:
+def _pick_provider(router: Any, *roles: str) -> Any | None:
     if router is None:
         return None
-    try:
-        return router.pick(role)
-    except Exception:
-        pass
+    for role in roles:
+        if not role:
+            continue
+        if not _router_has_role(router, role):
+            continue
+        try:
+            return router.pick(role)
+        except Exception:
+            continue
     providers_by_role = getattr(router, "_providers_by_role", None)
     if isinstance(providers_by_role, dict):
         for providers in providers_by_role.values():
@@ -329,6 +348,18 @@ def _record_result(router: Any, provider: Any, passed: bool, latency_ms: float, 
         router.record_result(provider.name, provider.role, passed, latency_ms, tokens_in, tokens_out)
     except Exception:
         return
+
+
+def _router_has_role(router: Any, role: str) -> bool:
+    providers_by_role = getattr(router, "_providers_by_role", None)
+    if isinstance(providers_by_role, dict):
+        candidates = providers_by_role.get(role)
+        if isinstance(candidates, list):
+            return len(candidates) > 0
+    providers = getattr(router, "_providers", None)
+    if isinstance(providers, dict):
+        return any(r == role for _, r in providers.keys())
+    return True
 
 
 def _extract_json(raw: str) -> dict[str, Any]:

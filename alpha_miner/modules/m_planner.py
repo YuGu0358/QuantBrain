@@ -41,6 +41,11 @@ class Planner:
             weights["struct_mutation"] = 0.5
         if retrieval.get("family_saturated"):
             weights["template_retrieval"] = 0.0
+        if retrieval.get("theme_saturated") or retrieval.get("math_saturated"):
+            weights["template_retrieval"] = 0.0
+            weights["param_tune"] = min(weights.get("param_tune", 0.0), 0.1)
+            weights["struct_mutation"] = max(weights.get("struct_mutation", 0.0), 0.6)
+            weights["llm_mutation"] = max(weights.get("llm_mutation", 0.0), 0.3)
         # normalise
         total_w = sum(weights.values()) or 1.0
         weights = {k: v / total_w for k, v in weights.items()}

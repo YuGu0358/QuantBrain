@@ -23,9 +23,11 @@ class RepairMemory:
                 INSERT OR REPLACE INTO repair_records (
                     record_id, timestamp, expression, symptom_tags, repair_actions,
                     accept_decision, rejection_reason, recommended_directions,
-                    forbidden_directions, metrics, family_tag, notes
+                    forbidden_directions, metrics, family_tag, notes,
+                    math_profile, economic_profile, repair_delta, outcome_score,
+                    platform_outcome
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     values["record_id"],
@@ -40,6 +42,11 @@ class RepairMemory:
                     values["metrics"],
                     values["family_tag"],
                     values["notes"],
+                    values["math_profile"],
+                    values["economic_profile"],
+                    values["repair_delta"],
+                    values["outcome_score"],
+                    values["platform_outcome"],
                 ),
             )
 
@@ -66,13 +73,15 @@ class RepairMemory:
         expression: str,
         family_tag: str | None = None,
         topk: int = 5,
+        math_profile: dict | None = None,
+        economic_profile: dict | None = None,
     ) -> dict:
         records = self.get_recent(limit=10000)
         scored_records = [
             {
                 **record,
                 "symptom_tags": _string_list(record.get("symptom_tags", [])),
-                "score": _retrieval_score(record, symptom_tags, family_tag),
+                "score": _retrieval_score(record, symptom_tags, family_tag, math_profile, economic_profile),
             }
             for record in records
         ]
@@ -88,12 +97,18 @@ class RepairMemory:
             for record in scored_records
             if record.get("accept_decision") == "rejected"
         ][:topk]
+        saturated_themes = _saturated_themes(records, family_tag, economic_profile)
+        saturated_math_signatures = _saturated_math_signatures(records, family_tag, math_profile)
 
         return {
             "positive": positive,
             "negative": negative,
             "forbidden_directions": _flatten_unique(negative, "forbidden_directions"),
             "recommended_directions": _flatten_unique(positive, "recommended_directions"),
+            "theme_saturated": bool(saturated_themes),
+            "math_saturated": bool(saturated_math_signatures),
+            "saturated_themes": saturated_themes,
+            "saturated_math_signatures": saturated_math_signatures,
         }
 
     def family_saturation(self, family_tag: str, threshold: int = 5) -> bool:
@@ -158,10 +173,29 @@ class RepairMemory:
                     forbidden_directions TEXT,
                     metrics TEXT,
                     family_tag TEXT,
-                    notes TEXT
+                    notes TEXT,
+                    math_profile TEXT,
+                    economic_profile TEXT,
+                    repair_delta TEXT,
+                    outcome_score REAL,
+                    platform_outcome TEXT
                 )
                 """
             )
+            existing = {
+                row[1]
+                for row in conn.execute("PRAGMA table_info(repair_records)").fetchall()
+            }
+            migrations = {
+                "math_profile": "ALTER TABLE repair_records ADD COLUMN math_profile TEXT",
+                "economic_profile": "ALTER TABLE repair_records ADD COLUMN economic_profile TEXT",
+                "repair_delta": "ALTER TABLE repair_records ADD COLUMN repair_delta TEXT",
+                "outcome_score": "ALTER TABLE repair_records ADD COLUMN outcome_score REAL",
+                "platform_outcome": "ALTER TABLE repair_records ADD COLUMN platform_outcome TEXT",
+            }
+            for column, statement in migrations.items():
+                if column not in existing:
+                    conn.execute(statement)
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
@@ -175,6 +209,22 @@ _JSON_FIELDS = {
     "recommended_directions",
     "forbidden_directions",
     "metrics",
+    "math_profile",
+    "economic_profile",
+    "repair_delta",
+    "platform_outcome",
+}
+
+_JSON_DEFAULTS = {
+    "symptom_tags": [],
+    "repair_actions": [],
+    "recommended_directions": [],
+    "forbidden_directions": [],
+    "metrics": {},
+    "math_profile": {},
+    "economic_profile": {},
+    "repair_delta": {},
+    "platform_outcome": {},
 }
 
 
@@ -193,6 +243,11 @@ def _record_values(record: dict[str, Any]) -> dict[str, str]:
         "metrics": record.get("metrics", {}),
         "family_tag": record.get("family_tag", ""),
         "notes": record.get("notes", ""),
+        "math_profile": record.get("math_profile", {}),
+        "economic_profile": record.get("economic_profile", {}),
+        "repair_delta": record.get("repair_delta", {}),
+        "outcome_score": _float_or_default(record.get("outcome_score"), 0.0),
+        "platform_outcome": record.get("platform_outcome", {}),
     }
     for field in _JSON_FIELDS:
         values[field] = json.dumps(values[field], ensure_ascii=False)
@@ -202,7 +257,8 @@ def _record_values(record: dict[str, Any]) -> dict[str, str]:
 def _decode_row(row: sqlite3.Row) -> dict[str, Any]:
     record = dict(row)
     for field in _JSON_FIELDS:
-        record[field] = _loads_json(record.get(field), [] if field != "metrics" else {})
+        record[field] = _loads_json(record.get(field), _JSON_DEFAULTS[field])
+    record["outcome_score"] = _float_or_default(record.get("outcome_score"), 0.0)
     return record
 
 
@@ -215,14 +271,59 @@ def _loads_json(value: Any, default: Any) -> Any:
         return default
 
 
-def _retrieval_score(record: dict[str, Any], query_tags: list[str], family_tag: str | None) -> float:
+def _retrieval_score(
+    record: dict[str, Any],
+    query_tags: list[str],
+    family_tag: str | None,
+    math_profile: dict | None = None,
+    economic_profile: dict | None = None,
+) -> float:
     overlap_score = _symptom_overlap_score(
         _string_list(record.get("symptom_tags", [])),
         _string_list(query_tags),
     )
     family_bonus = 0.3 if family_tag and record.get("family_tag") == family_tag else 0.0
+    economic_bonus = 0.0
+    if economic_profile and isinstance(record.get("economic_profile"), dict):
+        query_theme = str(economic_profile.get("theme") or "")
+        record_theme = str(record.get("economic_profile", {}).get("theme") or "")
+        if query_theme and query_theme == record_theme:
+            economic_bonus = 0.35
+    math_bonus = 0.35 * _math_profile_similarity(record.get("math_profile"), math_profile)
+    outcome_bonus = max(min(_float_or_default(record.get("outcome_score"), 0.0), 2.0), -2.0) * 0.03
     age_penalty = min(_days_since(record.get("timestamp")) * 0.01, 0.3)
-    return overlap_score + family_bonus - age_penalty
+    return overlap_score + family_bonus + economic_bonus + math_bonus + outcome_bonus - age_penalty
+
+
+def _math_profile_similarity(left: Any, right: Any) -> float:
+    if not isinstance(left, dict) or not isinstance(right, dict) or not left or not right:
+        return 0.0
+    scores = []
+    for key in ("operators", "fields", "windows", "group_fields"):
+        scores.append(_jaccard(left.get(key), right.get(key)))
+    if left.get("dominant_structure") and left.get("dominant_structure") == right.get("dominant_structure"):
+        scores.append(1.0)
+    return sum(scores) / len(scores) if scores else 0.0
+
+
+def _jaccard(left: Any, right: Any) -> float:
+    left_set = {str(item) for item in (left or [])}
+    right_set = {str(item) for item in (right or [])}
+    if not left_set and not right_set:
+        return 0.0
+    union = left_set.union(right_set)
+    if not union:
+        return 0.0
+    return len(left_set.intersection(right_set)) / len(union)
+
+
+def _float_or_default(value: Any, default: float) -> float:
+    try:
+        if value in (None, ""):
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def _symptom_overlap_score(record_tags: list[str], query_tags: list[str]) -> float:
@@ -264,6 +365,42 @@ def _flatten_unique(records: list[dict[str, Any]], field: str) -> list[str]:
     for record in records:
         values.extend(_string_list(record.get(field, [])))
     return list(dict.fromkeys(value for value in values if value))
+
+
+def _saturated_themes(
+    records: list[dict[str, Any]],
+    family_tag: str | None,
+    economic_profile: dict[str, Any] | None,
+    threshold: int = 3,
+) -> list[str]:
+    query_theme = str((economic_profile or {}).get("theme") or "").strip()
+    if not query_theme:
+        return []
+    accepted = [
+        record for record in records
+        if record.get("accept_decision") == "accepted"
+        and (not family_tag or record.get("family_tag") == family_tag)
+        and str((record.get("economic_profile") or {}).get("theme") or "").strip() == query_theme
+    ]
+    return [query_theme] if len(accepted) >= threshold else []
+
+
+def _saturated_math_signatures(
+    records: list[dict[str, Any]],
+    family_tag: str | None,
+    math_profile: dict[str, Any] | None,
+    threshold: int = 3,
+) -> list[str]:
+    query_signature = str((math_profile or {}).get("family_signature") or "").strip()
+    if not query_signature:
+        return []
+    accepted = [
+        record for record in records
+        if record.get("accept_decision") == "accepted"
+        and (not family_tag or record.get("family_tag") == family_tag)
+        and str((record.get("math_profile") or {}).get("family_signature") or "").strip() == query_signature
+    ]
+    return [query_signature] if len(accepted) >= threshold else []
 
 
 __all__ = ["RepairMemory"]

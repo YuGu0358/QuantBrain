@@ -50,6 +50,33 @@ assert.ok(
   "crowded operator skeletons should be blocked before BRAIN simulation",
 );
 
+const repeatedFieldBundleBatch = applyPreflight([
+  {
+    id: "field-bundle-a",
+    family: "fundamental-efficiency",
+    dataFamily: "FUNDAMENTAL_QUALITY",
+    horizon: "slow",
+    hypothesis: "First use of operating_income/assets bundle.",
+    expression: "rank(ts_mean(operating_income / assets, 63))",
+    settings: {},
+    signature: ["operating_income", "assets", "ts_mean", "63"],
+  },
+  {
+    id: "field-bundle-b",
+    family: "fundamental-quality",
+    dataFamily: "FUNDAMENTAL_QUALITY",
+    horizon: "slow",
+    hypothesis: "Second use of the same operating_income/assets bundle with a different operator.",
+    expression: "group_rank(ts_delta(operating_income / assets, 126), industry)",
+    settings: {},
+    signature: ["operating_income", "assets", "ts_delta", "126", "group_rank", "industry"],
+  },
+], emptyMemory, crowdedPlan, { phase: "test" });
+assert.ok(
+  repeatedFieldBundleBatch[1]?.preflightStatus?.reasons?.includes("field-bundle-overuse"),
+  "diversity-v2 should block repeated field bundles inside the same batch",
+);
+
 const sentimentOff = buildPlan("sentiment news attention alpha", {
   generatorStrategy: "diversity-v2",
   experimentalFields: false,

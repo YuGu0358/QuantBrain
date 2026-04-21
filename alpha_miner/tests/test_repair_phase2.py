@@ -7,13 +7,24 @@ from pathlib import Path
 from alpha_miner.modules.llm_cache import LLMCache
 from alpha_miner.modules.m1_knowledge_base import KnowledgeBase
 from alpha_miner.modules.m2_hypothesis_agent import HypothesisAgent
+from alpha_miner.modules.m3_validator import ExpressionValidator
 from alpha_miner.modules.m_diagnoser import DiagnosisReport
+from alpha_miner.modules.m_repair_intelligence import analyze_math_profile
+from alpha_miner.modules.m_repair_intelligence import infer_economic_profile
 from alpha_miner.modules.m_repair_memory import RepairMemory
 from alpha_miner.modules.m_retriever import Retriever
 
 
 def _timestamp(days_ago: int = 0) -> str:
     return (datetime.now(timezone.utc) - timedelta(days=days_ago)).isoformat()
+
+
+def _agent(tmp_path: Path) -> HypothesisAgent:
+    return HypothesisAgent(
+        kb=KnowledgeBase(tmp_path / "kb.db"),
+        cache=LLMCache(tmp_path / "cache"),
+        taxonomy={"QUALITY": {}, "MOMENTUM": {}},
+    )
 
 
 def test_repair_memory_retrieve_scores_by_symptoms_family_and_age(tmp_path: Path):
@@ -148,6 +159,47 @@ def test_retriever_gracefully_degrades_without_router(tmp_path: Path):
     assert result["retrieval_summary"] == ""
 
 
+def test_retriever_surfaces_theme_and_math_saturation(tmp_path: Path):
+    memory = RepairMemory(tmp_path / "repair_memory.sqlite")
+    expression = "rank(ts_delta(volume, 5))"
+    math_profile = analyze_math_profile(expression)
+    economic_profile = infer_economic_profile(expression, fields=math_profile["fields"])
+
+    for index in range(3):
+        memory.add_record(
+            {
+                "record_id": f"accepted-liquidity-{index}",
+                "timestamp": _timestamp(days_ago=index),
+                "expression": expression,
+                "symptom_tags": ["high_turnover"],
+                "accept_decision": "accepted",
+                "family_tag": "QUALITY",
+                "math_profile": math_profile,
+                "economic_profile": economic_profile,
+            }
+        )
+
+    diagnosis = DiagnosisReport(
+        primary_symptom="high_turnover",
+        secondary_symptoms=[],
+        root_causes=[],
+        repair_priorities=[],
+        do_not_change=[],
+        raw={},
+    )
+
+    result = Retriever(memory=memory, router=None).retrieve(
+        diagnosis=diagnosis,
+        expression=expression,
+        family_tag="QUALITY",
+    )
+
+    assert result["theme_saturated"] is True
+    assert result["math_saturated"] is True
+    assert result["saturated_themes"] == ["liquidity"]
+    assert result["saturated_math_signatures"] == [math_profile["family_signature"]]
+
+
 def test_hypothesis_agent_repair_payload_uses_attached_retriever(tmp_path: Path):
     class FakeRetriever:
         def retrieve(self, diagnosis, expression, family_tag=None):
@@ -196,3 +248,88 @@ def test_hypothesis_agent_repair_payload_uses_attached_retriever(tmp_path: Path)
     assert user_dict["recommended_directions"] == ["smooth fast volume"]
     assert user_dict["retrieval_summary"] == "Smoothing worked before. Avoid short deltas."
     assert "This alpha family is saturated" in user_dict["requirement"]
+
+
+def test_rule_repair_prioritizes_turnover_smoothing(tmp_path: Path):
+    agent = _agent(tmp_path)
+
+    candidates = agent._rule_based_repair_candidates(
+        {
+            "expression": "rank(ts_delta(volume, 5))",
+            "failedChecks": ["HIGH_TURNOVER"],
+        },
+        category="QUALITY",
+        n=3,
+    )
+
+    assert candidates
+    assert candidates[0].origin_refs == ["rule_repair", "rule_turnover_smooth"]
+
+
+def test_rule_repair_avoids_duplicate_group_rank_wrapper(tmp_path: Path):
+    agent = _agent(tmp_path)
+    parent = "group_rank(ts_rank(returns, 63), industry)"
+
+    candidates = agent._rule_based_repair_candidates(
+        {
+            "expression": parent,
+            "failedChecks": ["LOW_SHARPE"],
+        },
+        category="MOMENTUM",
+        n=3,
+    )
+
+    expressions = [candidate.expression for candidate in candidates]
+    assert f"group_rank({parent}, industry)" not in expressions
+
+
+def test_rule_repair_filters_invalid_parent_wrappers_and_keeps_valid_escape(tmp_path: Path):
+    agent = _agent(tmp_path)
+    validator = ExpressionValidator()
+
+    candidates = agent._rule_based_repair_candidates(
+        {
+            "expression": "magic_alpha(close)",
+            "failedChecks": ["SELF_CORRELATION"],
+        },
+        category="MOMENTUM",
+        n=3,
+    )
+
+    assert candidates
+    assert candidates[0].origin_refs == ["rule_repair", "rule_cross_family_escape"]
+    assert all(validator.validate(candidate.expression).is_valid for candidate in candidates)
+
+
+def test_rule_repair_respects_account_blocked_operators(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("BRAIN_OPERATOR_DENYLIST", "delay")
+    agent = _agent(tmp_path)
+
+    candidates = agent._rule_based_repair_candidates(
+        {
+            "expression": "rank(ts_delta(volume, 5))",
+            "failedChecks": ["HIGH_TURNOVER"],
+        },
+        category="QUALITY",
+        n=4,
+    )
+
+    assert candidates
+    assert all("delay(" not in candidate.expression for candidate in candidates)
+
+
+def test_complex_repair_without_agent_keeps_rule_escape_candidates(tmp_path: Path):
+    agent = _agent(tmp_path)
+
+    candidates = agent.generate_batch(
+        "repair objective",
+        category="MOMENTUM",
+        n=2,
+        repair_context={
+            "expression": "magic_alpha(close)",
+            "failedChecks": ["SELF_CORRELATION"],
+        },
+    )
+
+    assert candidates
+    assert candidates[0].origin_refs == ["rule_repair", "rule_cross_family_escape"]

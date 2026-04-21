@@ -122,6 +122,7 @@ class KnowledgeBase:
                 hypothesis=seed.get("note", "WQ101 baseline negative example."),
                 is_negative_example=True,
                 metadata=seed,
+                defer_embedding=True,
             )
             count += 1
         return count
@@ -134,9 +135,10 @@ class KnowledgeBase:
         hypothesis: str,
         is_negative_example: bool,
         metadata: dict[str, Any] | None = None,
+        defer_embedding: bool = False,
     ) -> None:
-        # Keep existing embedding if present; do NOT embed on upsert —
-        # backfill_embeddings() handles new items in batch after all imports finish.
+        # Keep existing embedding if present. Bulk imports can opt into deferred
+        # embedding so backfill_embeddings() can batch API calls.
         embedding_json: str | None = None
         if self.embedder is not None:
             with sqlite3.connect(self.db_path) as db:
@@ -145,6 +147,12 @@ class KnowledgeBase:
                 ).fetchone()
             if row and row[0]:
                 embedding_json = row[0]  # keep existing vector
+            elif not defer_embedding:
+                text = f"{category} {expression} {hypothesis or ''}"
+                try:
+                    embedding_json = json.dumps(self.embedder.embed_query(text))
+                except Exception as exc:
+                    print(f"[kb] embedding skipped for {item_id}: {exc}", flush=True)
 
         with sqlite3.connect(self.db_path) as db:
             db.execute(

@@ -18,7 +18,7 @@ from alpha_miner.modules.m_repair_memory import RepairMemory
 from alpha_miner.modules.m_retriever import Retriever
 from alpha_miner.modules.m_planner import Planner
 from alpha_miner.modules.m_scheduler import BanditScheduler
-from alpha_miner.modules.m_repair_chain import RepairChain
+from alpha_miner.modules.m_repair_chain import DEFAULT_REPAIR_CHAIN_MODEL, RepairChain
 
 from .modules.common import PACKAGE_ROOT, append_jsonl, read_json, set_seed, write_json
 from .modules.config_loader import load_config, load_taxonomy
@@ -30,12 +30,36 @@ from .modules.m4_brain_backtester import BrainBacktester, QuotaWaiting
 from .modules.m6_alpha_pool import AlphaPool, load_pnl_series
 from .modules.m7_stat_significance import StatSignificance
 from .modules.m8_portfolio_optimizer import PortfolioOptimizer
+from .modules.m_quality_guardrails import economic_logic_prescreen, should_try_sign_flip, sign_flip_expression
+
+
+DEFAULT_GENERATION_MODEL = "gpt-5.4-2026-03-05"
+DEFAULT_REPAIR_MODEL = DEFAULT_REPAIR_CHAIN_MODEL
+DEFAULT_REPAIR_ROUTER_PROVIDER_NAME = "gpt_repair"
 
 
 def _ts() -> str:
     """Return current UTC time as ISO-8601 string for progress.jsonl 'at' field."""
     from datetime import datetime, timezone
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _primary_llm_api_key(model_id: str, openai_key: str) -> str:
+    if model_id.startswith(("claude",)):
+        return os.environ.get("ANTHROPIC_API_KEY", "")
+    return openai_key
+
+
+def _diagnosis_summary(diagnosis: Any) -> dict[str, Any] | None:
+    if diagnosis is None:
+        return None
+    raw = diagnosis.raw if isinstance(getattr(diagnosis, "raw", None), dict) else {}
+    return {
+        "primary_symptom": diagnosis.primary_symptom,
+        "secondary_symptoms": diagnosis.secondary_symptoms,
+        "fallback": bool(raw.get("fallback")),
+        "error": raw.get("error"),
+    }
 
 
 def main() -> None:
@@ -69,6 +93,7 @@ def main() -> None:
     _import_submitted_feedback(kb, shared_dir / "submitted_alphas.jsonl")
     cache = LLMCache(output_dir / "llm_cache")
     taxonomy = load_taxonomy()
+    validator = ExpressionValidator()
     router = None
     if os.environ.get("LLM_ROUTER_ENABLED", "true").lower() != "false":
         router = LLMRouter.from_yaml()
@@ -96,15 +121,15 @@ def main() -> None:
         kb=kb,
         cache=cache,
         taxonomy=taxonomy,
-        model="claude-opus-4-6",
+        model=DEFAULT_GENERATION_MODEL,
         temperature=float(generation_cfg.get("temperature", 0.4)),
         top_p=float(generation_cfg.get("top_p", 0.9)),
         max_tokens=int(generation_cfg.get("max_tokens", 2000)),
         seed=int(generation_cfg.get("seed", 42)),
         router=router,
         use_llm=(router is not None),
+        validator=validator,
     )
-    validator = ExpressionValidator()
     stat = StatSignificance(
         dsr_threshold=float(config.get("stat", {}).get("dsr_threshold", 0.95)),
         pbo_threshold=float(config.get("stat", {}).get("pbo_threshold", 0.30)),
@@ -147,11 +172,11 @@ def main() -> None:
         repair_memory_path = output_dir.parent / "repair_memory.db"
         repair_memory = RepairMemory(repair_memory_path)
         agent.repair_memory = repair_memory
-        # LangChain repair chain (primary path) — defaults to Claude opus-4-6
-        repair_model = os.environ.get("REPAIR_MODEL", "claude-opus-4-6")
+        # LangChain repair chain (primary path) — GPT by default, Claude still supported via override.
+        repair_model = os.environ.get("REPAIR_MODEL", DEFAULT_REPAIR_MODEL)
         agent.repair_chain = RepairChain(
             memory=repair_memory,
-            api_key=os.environ.get("ANTHROPIC_API_KEY", ""),
+            api_key=_primary_llm_api_key(repair_model, _openai_key),
             model_id=repair_model,
             openai_api_key=_openai_key,
         )
@@ -183,6 +208,8 @@ def main() -> None:
                 "primary_symptom": diagnosis.primary_symptom,
                 "secondary_symptoms": diagnosis.secondary_symptoms,
                 "repair_priorities": diagnosis.repair_priorities,
+                "fallback": bool((diagnosis.raw or {}).get("fallback")) if isinstance(diagnosis.raw, dict) else False,
+                "error": (diagnosis.raw or {}).get("error") if isinstance(diagnosis.raw, dict) else None,
             },
         )
 
@@ -196,26 +223,92 @@ def main() -> None:
         diagnosis=diagnosis,
     )
     _gen_latency_ms = (time.time() - _t_gen_start) * 1000
-    # Record repair chain usage in the LLM router so the dashboard shows real activity
+    # Record repair-chain usage in LLM router using real token usage metadata.
     if repair_ctx is not None and router is not None and candidates:
         try:
-            # Estimate token usage: repair prompt ~2000 in + ~600 out per Claude call
-            _repair_passed = len(candidates) > 0
-            router.record_result("claude_repair", "repair", _repair_passed, _gen_latency_ms, 2000, 600)
+            _usage = getattr(getattr(agent, "repair_chain", None), "last_usage", {}) or {}
+            _repair_ti = int(_usage.get("input_tokens") or 0)
+            _repair_to = int(_usage.get("output_tokens") or 0)
+            _repair_calls = int(_usage.get("calls") or 0)
+            if _repair_calls > 0 or (_repair_ti + _repair_to) > 0:
+                _repair_latency_ms = float(_usage.get("latency_ms") or _gen_latency_ms)
+                _provider_name = _resolve_router_provider_name(
+                    router,
+                    "repair",
+                    preferred_name=os.environ.get(
+                        "REPAIR_ROUTER_PROVIDER_NAME",
+                        DEFAULT_REPAIR_ROUTER_PROVIDER_NAME,
+                    ),
+                )
+                if _provider_name:
+                    router.record_result(
+                        _provider_name,
+                        "repair",
+                        len(candidates) > 0,
+                        _repair_latency_ms,
+                        _repair_ti,
+                        _repair_to,
+                    )
         except Exception:
             pass
 
     validator_records = []
     valid_candidates = []
-    rejected_by_stage = {"validator": 0, "dsr": 0, "pbo": 0, "oos": 0, "orthogonality": 0, "no_pnl": 0}
+    rejected_by_stage = {
+        "validator": 0,
+        "economic_prescreen": 0,
+        "dsr": 0,
+        "pbo": 0,
+        "oos": 0,
+        "orthogonality": 0,
+        "no_pnl": 0,
+    }
     for candidate in candidates:
-        result = validator.validate(candidate.expression)
-        validator_records.append({"candidate": asdict(candidate), "validation": asdict(result)})
-        if result.is_valid:
+        validation = validator.validate(candidate.expression)
+        prescreen = economic_logic_prescreen(candidate.expression)
+        validator_records.append(
+            {
+                "candidate": asdict(candidate),
+                "validation": asdict(validation),
+                "economicPrescreen": asdict(prescreen),
+            }
+        )
+        if validation.is_valid and prescreen.is_valid:
             valid_candidates.append(candidate)
         else:
-            rejected_by_stage["validator"] += 1
-            append_jsonl(progress_path, {"at": _ts(), "stage": "rejected", "reason": "validator", "candidate_id": candidate.id, "errors": result.errors})
+            if not validation.is_valid:
+                rejected_by_stage["validator"] += 1
+                print(
+                    f"[validator] rejected candidate_id={candidate.id} expression={candidate.expression[:120]!r} errors={validation.errors}",
+                    flush=True,
+                )
+                append_jsonl(
+                    progress_path,
+                    {
+                        "at": _ts(),
+                        "stage": "rejected",
+                        "reason": "validator",
+                        "candidate_id": candidate.id,
+                        "errors": validation.errors,
+                    },
+                )
+            else:
+                rejected_by_stage["economic_prescreen"] += 1
+                print(
+                    f"[economic_prescreen] rejected candidate_id={candidate.id} expression={candidate.expression[:120]!r} reasons={prescreen.reasons}",
+                    flush=True,
+                )
+                append_jsonl(
+                    progress_path,
+                    {
+                        "at": _ts(),
+                        "stage": "rejected",
+                        "reason": "economic_prescreen",
+                        "candidate_id": candidate.id,
+                        "errors": prescreen.reasons,
+                        "warnings": prescreen.warnings,
+                    },
+                )
 
     round_payload = {
         "round": 1,
@@ -231,6 +324,8 @@ def main() -> None:
     phase0_status = phase0_mode(args.mode)
     blocked_reason = phase0_status if phase0_status in {"phase0_brain_probe_report_missing", "phase0_brain_probe_not_actionable"} else None
     degraded_mode = phase0_status == "regular_tier_degraded_no_daily_pnl"
+    companion_sign_flip_count = 0
+    companion_sign_flip_promotions = 0
     if blocked_reason:
         append_jsonl(progress_path, {"at": _ts(), "stage": "blocked", "reason": blocked_reason})
     elif args.mode in {"evaluate", "loop"}:
@@ -267,7 +362,30 @@ def main() -> None:
             if _pair is None:
                 continue  # slot was quota-hit or not submitted
             candidate, result = _pair
+            candidate, result, companion = _maybe_promote_sign_flip_companion(
+                backtester,
+                validator,
+                candidate,
+                result,
+                sim_settings,
+            )
             record = {"candidate": asdict(candidate), "backtest": asdict(result)}
+            if companion is not None:
+                companion_sign_flip_count += 1
+                companion_sign_flip_promotions += 1 if companion.get("promoted") else 0
+                record["companion"] = companion
+                append_jsonl(
+                    progress_path,
+                    {
+                        "at": _ts(),
+                        "stage": "sign_flip_companion",
+                        "candidate_id": candidate.id,
+                        "status": companion.get("status"),
+                        "promoted": companion.get("promoted", False),
+                        "original_sharpe": companion.get("originalSharpe"),
+                        "flipped_sharpe": companion.get("flippedSharpe"),
+                    },
+                )
             if result.pnl_path:
                 pnl = load_pnl_series(Path(result.pnl_path))
                 dsr = stat.deflated_sharpe(result.sharpe or 0.0, [result.sharpe or 0.0], max(len(pnl), 2))
@@ -360,18 +478,42 @@ def main() -> None:
         accepted_expr = next((item["expression"] for item in tried if item["accepted"]), None)
         # Feed repair outcomes back into LangChain RepairChain memory (closes the FAISS learning loop)
         if agent.repair_chain is not None:
-            _rc_diag = diagnosis.raw if diagnosis is not None else {}
+            _rc_diag = {}
+            if diagnosis is not None:
+                _rc_diag = {
+                    "primary_symptom": diagnosis.primary_symptom,
+                    "secondary_symptoms": diagnosis.secondary_symptoms,
+                    "root_causes": diagnosis.root_causes,
+                    "repair_priorities": diagnosis.repair_priorities,
+                    "do_not_change": diagnosis.do_not_change,
+                }
+                if isinstance(diagnosis.raw, dict):
+                    _rc_diag.update(diagnosis.raw)
             for r in evaluated_records:
                 _cand = r.get("candidate", {})
+                _accepted = bool(
+                    r.get("degradedQualified")
+                    or (r.get("dsr") is not None and r.get("orthogonality", {}).get("passed", False))
+                )
+                _status = str(r.get("status") or "")
                 agent.repair_chain.record_outcome(
                     expression=repair_ctx.get("expression", ""),
                     diagnosis=_rc_diag if isinstance(_rc_diag, dict) else {},
                     candidates=[_cand] if _cand else [],
-                    accepted=r.get("dsr") is not None and r.get("orthogonality", {}).get("passed", False),
+                    accepted=_accepted,
+                    candidate_metrics=r.get("backtest", {}) or {},
+                    gate=repair_ctx.get("gate") if isinstance(repair_ctx.get("gate"), dict) else {},
+                    platform_outcome={
+                        "outcome": "accepted" if _accepted else ("degraded_no_daily_pnl" if _status == "no_daily_pnl" else _status),
+                        "status": _status,
+                        "alpha_id": r.get("backtest", {}).get("alpha_id"),
+                        "degradedQualified": r.get("degradedQualified", False),
+                        "repairDepth": repair_ctx.get("repairDepth", 0),
+                    },
+                    category=_cand.get("category") or repair_ctx.get("_category"),
                 )
 
-    if repair_ctx is not None and router is not None and diagnosis is not None and repair_memory is not None:
-        distiller = Distiller(router, repair_memory)
+    if repair_ctx is not None and diagnosis is not None and repair_memory is not None:
         tried = [
             {
                 "expression": r["candidate"]["expression"],
@@ -383,33 +525,52 @@ def main() -> None:
             for r in evaluated_records
         ]
         accepted_expr = next((item["expression"] for item in tried if item["accepted"]), None)
-        distiller.distill(
-            original_expression=repair_ctx.get("expression", ""),
-            diagnosis=diagnosis,
-            tried_candidates=tried,
-            accepted_expression=accepted_expr,
-        )
-        append_jsonl(progress_path, {"at": _ts(), "stage": "distilled", "accepted": accepted_expr is not None})
+
+        if router is not None:
+            # Distill cadence (default every run). Sampling only affects memory learning,
+            # never quality gates.
+            _repair_distill_every_n = max(1, int(os.environ.get("REPAIR_DISTILL_EVERY_N", "1")))
+            if _should_run_cadence(shared_dir, "repair_distill", _repair_distill_every_n):
+                distiller = Distiller(router, repair_memory)
+                distiller.distill(
+                    original_expression=repair_ctx.get("expression", ""),
+                    diagnosis=diagnosis,
+                    tried_candidates=tried,
+                    accepted_expression=accepted_expr,
+                )
+                append_jsonl(progress_path, {"at": _ts(), "stage": "distilled", "accepted": accepted_expr is not None})
+            else:
+                append_jsonl(
+                    progress_path,
+                    {
+                        "at": _ts(),
+                        "stage": "distill_skipped",
+                        "reason": "repair_distill_sampling",
+                        "every_n": _repair_distill_every_n,
+                    },
+                )
+
         # Bandit scheduler: record action outcomes
-        metrics_orig = repair_ctx.get("metrics", {})
-        s_old = float(metrics_orig.get("isSharpe") or metrics_orig.get("sharpe") or 0)
-        f_old = float(metrics_orig.get("isFitness") or metrics_orig.get("fitness") or 0)
-        t_old = float(metrics_orig.get("turnover") or 0)
-        j_old = s_old * f_old - 0.5 * max(0.0, t_old - 0.7)
-        sched_outcomes = []
-        for r in evaluated_records:
-            bt = r.get("backtest", {})
-            action_type = next(
-                (ref for ref in (r.get("candidate", {}).get("origin_refs") or [])
-                 if ref in {"param_tune", "struct_mutation", "template_retrieval", "llm_mutation"}),
-                "llm_mutation",
-            )
-            j_new = (float(bt.get("sharpe") or 0) * float(bt.get("fitness") or 0)
-                     - 0.5 * max(0.0, float(bt.get("turnover") or 0) - 0.7))
-            accepted_r = r.get("dsr") is not None and r.get("orthogonality", {}).get("passed", False)
-            sched_outcomes.append({"action_type": action_type, "accepted": accepted_r, "j_old": j_old, "j_new": j_new})
-        scheduler.record_batch_outcomes(sched_outcomes)
-        append_jsonl(progress_path, {"at": _ts(), "stage": "scheduler_updated", "weights": scheduler.get_weights()})
+        if scheduler is not None:
+            metrics_orig = repair_ctx.get("metrics", {})
+            s_old = float(metrics_orig.get("isSharpe") or metrics_orig.get("sharpe") or 0)
+            f_old = float(metrics_orig.get("isFitness") or metrics_orig.get("fitness") or 0)
+            t_old = float(metrics_orig.get("turnover") or 0)
+            j_old = s_old * f_old - 0.5 * max(0.0, t_old - 0.7)
+            sched_outcomes = []
+            for r in evaluated_records:
+                bt = r.get("backtest", {})
+                action_type = next(
+                    (ref for ref in (r.get("candidate", {}).get("origin_refs") or [])
+                     if ref in {"param_tune", "struct_mutation", "template_retrieval", "llm_mutation"}),
+                    "llm_mutation",
+                )
+                j_new = (float(bt.get("sharpe") or 0) * float(bt.get("fitness") or 0)
+                         - 0.5 * max(0.0, float(bt.get("turnover") or 0) - 0.7))
+                accepted_r = r.get("dsr") is not None and r.get("orthogonality", {}).get("passed", False)
+                sched_outcomes.append({"action_type": action_type, "accepted": accepted_r, "j_old": j_old, "j_new": j_new})
+            scheduler.record_batch_outcomes(sched_outcomes)
+            append_jsonl(progress_path, {"at": _ts(), "stage": "scheduler_updated", "weights": scheduler.get_weights()})
 
     portfolio = optimizer.optimize(portfolio_pool)
     write_json(output_dir / "portfolio.json", asdict(portfolio))
@@ -424,20 +585,28 @@ def main() -> None:
     memory = {"effectivePool": portfolio_pool, "deprecatedPool": [], "trajectories": validator_records, "objectiveHistory": [{"objective": args.objective}]}
     write_json(output_dir / "memory.json", memory)
 
+    _llm_stage_metrics = _router_stage_metrics(router)
     summary = {
         "engine": "python-v2",
         "mode": args.mode,
         "objective": args.objective,
         "category": category,
+        "diagnosis": _diagnosis_summary(diagnosis),
         "phase0Status": phase0_status,
         "degradedMode": degraded_mode,
         "generatedCandidates": len(candidates),
         "validCandidates": len(valid_candidates),
         "qualified_alphas_count": len(portfolio_pool),
+        "companion_sign_flip_count": companion_sign_flip_count,
+        "companion_sign_flip_promotions": companion_sign_flip_promotions,
         "degraded_candidates_count": sum(1 for record in evaluated_records if record.get("status") == "no_daily_pnl"),
         "total_llm_tokens": _router_token_totals(router),
         "total_llm_cost_usd": round(router.spent_usd, 6) if router is not None else 0.0,
-        "total_brain_simulations": len(evaluated_records),
+        "llm_stage_tokens": _llm_stage_metrics["tokens"],
+        "llm_stage_calls": _llm_stage_metrics["calls"],
+        "llm_stage_cost_usd": _llm_stage_metrics["cost_usd"],
+        "llm_stage_latency_ms": _llm_stage_metrics["latency_ms"],
+        "total_brain_simulations": len(evaluated_records) + companion_sign_flip_count,
         "total_runtime_seconds": round(time.time() - started, 4),
         "rejected_by_stage": rejected_by_stage,
         "topCandidates": [
@@ -458,12 +627,24 @@ def main() -> None:
     }
     write_json(output_dir / "summary.json", summary)
     if os.environ.get("KNOWLEDGE_DISTILL_ENABLED", "false").lower() == "true" and router is not None:
-        try:
-            pool_data = read_json(output_dir / "pool.json", default={})
-            distiller = KnowledgeDistiller(kb=kb, router=router)
-            distiller.distill(pool_data)
-        except Exception as exc:
-            print(f"[distiller] skipped: {exc}")
+        _knowledge_every_n = max(1, int(os.environ.get("KNOWLEDGE_DISTILL_EVERY_N", "1")))
+        if _should_run_cadence(shared_dir, "knowledge_distill", _knowledge_every_n):
+            try:
+                pool_data = read_json(output_dir / "pool.json", default={})
+                distiller = KnowledgeDistiller(kb=kb, router=router)
+                distiller.distill(pool_data)
+            except Exception as exc:
+                print(f"[distiller] skipped: {exc}")
+        else:
+            append_jsonl(
+                progress_path,
+                {
+                    "at": _ts(),
+                    "stage": "knowledge_distill_skipped",
+                    "reason": "knowledge_distill_sampling",
+                    "every_n": _knowledge_every_n,
+                },
+            )
     if router is not None:
         router.save_state(output_dir / "llm_router_state.json")
         # Also write to RUNS_DIR root so the dashboard can find it
@@ -539,6 +720,134 @@ def _router_token_totals(router) -> dict[str, int]:
     prompt_total = sum(p.total_tokens_in for p in router._providers.values())
     completion_total = sum(p.total_tokens_out for p in router._providers.values())
     return {"prompt": prompt_total, "completion": completion_total}
+
+
+def _router_stage_metrics(router) -> dict[str, dict[str, Any]]:
+    if router is None:
+        return {
+            "tokens": {},
+            "calls": {},
+            "cost_usd": {},
+            "latency_ms": {},
+        }
+    tokens: dict[str, dict[str, int]] = {}
+    calls: dict[str, int] = {}
+    cost_usd: dict[str, float] = {}
+    latency_ms: dict[str, dict[str, float]] = {}
+    for provider in router._providers.values():
+        role = str(provider.role)
+        role_tokens = tokens.setdefault(role, {"prompt": 0, "completion": 0})
+        role_tokens["prompt"] += int(provider.total_tokens_in)
+        role_tokens["completion"] += int(provider.total_tokens_out)
+        calls[role] = calls.get(role, 0) + int(provider.calls)
+        cost_usd[role] = round(
+            cost_usd.get(role, 0.0)
+            + float(provider.cost_usd(provider.total_tokens_in, provider.total_tokens_out)),
+            6,
+        )
+        total_latency = latency_ms.get(role, {}).get("total", 0.0) + float(provider.total_latency_ms)
+        role_calls = calls[role]
+        latency_ms[role] = {
+            "total": round(total_latency, 3),
+            "avg_per_call": round(total_latency / role_calls, 3) if role_calls > 0 else 0.0,
+        }
+    return {
+        "tokens": dict(sorted(tokens.items())),
+        "calls": dict(sorted(calls.items())),
+        "cost_usd": dict(sorted(cost_usd.items())),
+        "latency_ms": dict(sorted(latency_ms.items())),
+    }
+
+
+def _resolve_router_provider_name(router, role: str, preferred_name: str | None = None) -> str | None:
+    if router is None:
+        return None
+    providers_by_role = getattr(router, "_providers_by_role", None)
+    providers = providers_by_role.get(role, []) if isinstance(providers_by_role, dict) else []
+    if not providers:
+        return None
+    if preferred_name:
+        for provider in providers:
+            if provider.name == preferred_name:
+                return provider.name
+    return providers[0].name
+
+
+def _should_run_cadence(shared_dir: Path, key: str, every_n: int) -> bool:
+    if every_n <= 1:
+        return True
+    cadence_path = shared_dir / "llm_cadence_state.json"
+    try:
+        state = read_json(cadence_path, default={}) or {}
+        count = int(state.get(key, 0)) + 1
+        state[key] = count
+        write_json(cadence_path, state)
+        return count % every_n == 0
+    except Exception:
+        # Fail-open to avoid silently disabling learning loops.
+        return True
+
+
+def _maybe_promote_sign_flip_companion(
+    backtester: BrainBacktester,
+    validator: ExpressionValidator,
+    candidate: Any,
+    result: Any,
+    sim_settings: dict[str, Any] | None,
+) -> tuple[Any, Any, dict[str, Any] | None]:
+    if not should_try_sign_flip(result):
+        return candidate, result, None
+
+    flipped_expression = sign_flip_expression(candidate.expression)
+    flipped_validation = validator.validate(flipped_expression)
+    flipped_prescreen = economic_logic_prescreen(flipped_expression)
+    companion_info: dict[str, Any] = {
+        "type": "auto_sign_flip",
+        "originalExpression": candidate.expression,
+        "flippedExpression": flipped_expression,
+        "originalSharpe": result.sharpe,
+        "promoted": False,
+    }
+    if not flipped_validation.is_valid:
+        companion_info["status"] = "invalid"
+        companion_info["validationErrors"] = flipped_validation.errors
+        return candidate, result, companion_info
+    if not flipped_prescreen.is_valid:
+        companion_info["status"] = "economic_prescreen_rejected"
+        companion_info["economicPrescreen"] = asdict(flipped_prescreen)
+        return candidate, result, companion_info
+
+    try:
+        flipped_result = backtester.submit_alpha(flipped_expression, period="IS", settings=sim_settings or None)
+    except QuotaWaiting as error:
+        companion_info["status"] = "quota_waiting"
+        companion_info["error"] = str(error)
+        return candidate, result, companion_info
+    except Exception as error:
+        companion_info["status"] = "error"
+        companion_info["error"] = str(error)
+        return candidate, result, companion_info
+
+    companion_info["status"] = "tested"
+    companion_info["flippedSharpe"] = flipped_result.sharpe
+    companion_info["flippedResult"] = asdict(flipped_result)
+    base_sharpe = float(result.sharpe) if result.sharpe is not None else float("-inf")
+    flipped_sharpe = float(flipped_result.sharpe) if flipped_result.sharpe is not None else float("-inf")
+    if flipped_sharpe <= base_sharpe:
+        return candidate, result, companion_info
+
+    flipped_candidate = candidate.__class__(
+        id=f"{candidate.id}__signflip",
+        category=candidate.category,
+        hypothesis=f"Sign-flipped companion of: {candidate.hypothesis}",
+        expression=flipped_expression,
+        origin_refs=[*(candidate.origin_refs or []), "auto_sign_flip"],
+        metadata={**getattr(candidate, "metadata", {}), "auto_sign_flip": "true"},
+        opt_rounds=getattr(candidate, "opt_rounds", 0),
+    )
+    companion_info["promoted"] = True
+    companion_info["promotedCandidateId"] = flipped_candidate.id
+    return flipped_candidate, flipped_result, companion_info
 
 
 _CASE_C_THRESHOLD = 0.20

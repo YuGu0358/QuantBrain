@@ -27,8 +27,11 @@ class Distiller:
     ) -> dict:
         distilled = _empty_distillation()
         provider = None
+        primary_role = os.environ.get("DISTILL_LLM_ROLE", "distill")
+        fallback_role = os.environ.get("DISTILL_FALLBACK_ROLE", "repair")
+        request_payload = None
         try:
-            provider = _pick_provider(self.router, "distill")
+            provider = _pick_provider(self.router, primary_role, fallback_role)
             if provider is None:
                 raise RuntimeError("No LLM provider available")
             request_payload = {
@@ -77,7 +80,20 @@ class Distiller:
             print(f"[distiller] distill failed: {type(_e).__name__}: {_e}", flush=True)
             if provider is not None:
                 _record_result(self.router, provider, False, 0.0, 0, 0)
-            distilled = _empty_distillation()
+            _fallback_succeeded = False
+            if request_payload is not None and provider is not None and fallback_role and provider.role != fallback_role:
+                hq_provider = _pick_provider(self.router, fallback_role)
+                if hq_provider is not None:
+                    try:
+                        raw, tokens_in, tokens_out, latency_ms = _invoke_provider(self, self.router, hq_provider, request_payload)
+                        distilled = _normalize_distillation(_extract_json(raw))
+                        _record_result(self.router, hq_provider, True, latency_ms, tokens_in, tokens_out)
+                        _fallback_succeeded = True
+                    except Exception as _e2:
+                        print(f"[distiller] fallback distill failed: {type(_e2).__name__}: {_e2}", flush=True)
+                        _record_result(self.router, hq_provider, False, 0.0, 0, 0)
+            if not _fallback_succeeded:
+                distilled = _empty_distillation()
 
         self.memory.add_record(
             {
@@ -151,7 +167,9 @@ class Distiller:
 _SYSTEM_PROMPT = (
     "You are a quantitative factor repair Distiller. Extract reusable lessons from this repair round.\n"
     "Return ONLY valid JSON with keys: recommended_directions (list[str]), forbidden_directions (list[str]),\n"
-    "reusable_patterns (list[str]), regime_lessons (list[str]), symptom_tags (list[str])"
+    "reusable_patterns (list[str]), regime_lessons (list[str]), symptom_tags (list[str]).\n"
+    "Directions should mention reusable mathematical actions and economic themes when visible, "
+    "for example smoothing liquidity signals or avoiding group-only wrappers for self-correlation."
 )
 
 
@@ -174,7 +192,17 @@ def _diagnosis_symptom_tags(diagnosis: DiagnosisReport) -> list[str]:
 
 
 def _candidate_summary(tried_candidates: list[dict]) -> list[dict[str, Any]]:
-    keys = ("expression", "sharpe", "fitness", "turnover", "max_abs_correlation", "accepted")
+    keys = (
+        "expression",
+        "sharpe",
+        "fitness",
+        "turnover",
+        "max_abs_correlation",
+        "accepted",
+        "repair_delta",
+        "economic_profile",
+        "math_profile",
+    )
     return [{key: candidate.get(key) for key in keys if key in candidate} for candidate in tried_candidates]
 
 
@@ -225,13 +253,18 @@ def _empty_distillation() -> dict[str, list[str]]:
     }
 
 
-def _pick_provider(router: Any, role: str) -> Any | None:
+def _pick_provider(router: Any, *roles: str) -> Any | None:
     if router is None:
         return None
-    try:
-        return router.pick(role)
-    except Exception:
-        pass
+    for role in roles:
+        if not role:
+            continue
+        if not _router_has_role(router, role):
+            continue
+        try:
+            return router.pick(role)
+        except Exception:
+            continue
     providers_by_role = getattr(router, "_providers_by_role", None)
     if isinstance(providers_by_role, dict):
         for providers in providers_by_role.values():
@@ -259,6 +292,23 @@ def _record_result(router: Any, provider: Any, passed: bool, latency_ms: float, 
         router.record_result(provider.name, provider.role, passed, latency_ms, tokens_in, tokens_out)
     except Exception:
         return
+
+
+def _router_has_role(router: Any, role: str) -> bool:
+    providers_by_role = getattr(router, "_providers_by_role", None)
+    if isinstance(providers_by_role, dict):
+        candidates = providers_by_role.get(role)
+        if isinstance(candidates, list):
+            return len(candidates) > 0
+    providers = getattr(router, "_providers", None)
+    if isinstance(providers, dict):
+        if any(r == role for _, r in providers.keys()):
+            return True
+        # Test doubles may switch provider roles dynamically via router.pick.
+        if providers_by_role is None and callable(getattr(router, "pick", None)):
+            return True
+        return False
+    return True
 
 
 def _extract_json(raw: str) -> dict[str, Any]:

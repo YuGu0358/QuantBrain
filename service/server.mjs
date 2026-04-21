@@ -6,6 +6,20 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import * as crypto from "node:crypto";
 import { createCipheriv, createDecipheriv, randomBytes, randomUUID, scryptSync, timingSafeEqual } from "node:crypto";
+import {
+  buildTemplateObjective as buildDiversifiedTemplateObjective,
+  normalizeObjectiveSignature,
+  objectiveNeedsDiversification as objectiveNeedsDiversificationWithHistory,
+  pickNextTarget as pickNextObjectiveTarget,
+  pickTemplateVariantIndex,
+} from "./objective_diversity.mjs";
+import {
+  flattenProviderEntries,
+  formatProviderWinRate,
+  summarizeDiagnoseProvider,
+} from "./llm_router_dashboard.mjs";
+import { describeRunLiveness } from "./run_liveness.mjs";
+import { finalizeRunExit } from "./run_runtime.mjs";
 
 const API_ROOT = "https://api.worldquantbrain.com";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -26,8 +40,8 @@ const ADMIN_TOKEN = process.env.ADMIN_TOKEN ?? "";
 const CREDENTIALS_SECRET = process.env.CREDENTIALS_SECRET ?? "";
 const DASHBOARD_USERS = parseDashboardUsers(process.env.DASHBOARD_USERS ?? "");
 const REGISTRATION_CODE = process.env.REGISTRATION_CODE ?? "";
-const OPENAI_IDEA_MODEL = process.env.OPENAI_IDEA_MODEL ?? "gpt-4o-mini";
-const OPENAI_OPTIMIZE_MODEL = "gpt-4o-mini";
+const OPENAI_IDEA_MODEL = process.env.OPENAI_IDEA_MODEL ?? "gpt-5.4-mini";
+const OPENAI_OPTIMIZE_MODEL = process.env.OPENAI_OPTIMIZE_MODEL ?? "gpt-5.4-mini";
 const OPENAI_PLANNER_MODEL = "gpt-5.4-2026-03-05";
 const OPTIMIZE_IDEA_SYSTEM_PROMPT =
   'You are a WorldQuant BRAIN alpha research specialist. Convert the user idea into a structured research direction. Return strict JSON: {"objective":string,"category":one of QUALITY/MOMENTUM/REVERSAL/LIQUIDITY/VOLATILITY/MICROSTRUCTURE/SENTIMENT,"hypothesis":string,"constraints":[string],"suggested_data_fields":[string]}';
@@ -60,6 +74,7 @@ const AUTO_REPAIR_ENGINE = normalizeEngine(process.env.AUTO_REPAIR_ENGINE ?? "py
 const AUTO_REPAIR_MAX_ROUNDS = clampInt(process.env.AUTO_REPAIR_MAX_ROUNDS, 5, 1, 10);
 const AUTO_REPAIR_MAX_QUEUE = clampInt(process.env.AUTO_REPAIR_MAX_QUEUE, 5, 1, 20);
 const AUTO_REPAIR_BATCH_SIZE = clampInt(process.env.AUTO_REPAIR_BATCH_SIZE, 1, 1, 10);
+const ACTIVE_RUN_STALL_MINUTES = clampInt(process.env.ACTIVE_RUN_STALL_MINUTES, 20, 5, 240);
 const REPAIR_TARGET_SHARPE = parseFloat(process.env.REPAIR_TARGET_SHARPE ?? "1.25");
 const REPAIR_TARGET_FITNESS = parseFloat(process.env.REPAIR_TARGET_FITNESS ?? "1.0");
 const REPAIR_TARGET_TURNOVER = parseFloat(process.env.REPAIR_TARGET_TURNOVER ?? "0.70");
@@ -70,6 +85,19 @@ const ALPHA_GENERATOR_STRATEGY = ["legacy", "diversity-v2"].includes(process.env
 const ALPHA_EXPERIMENTAL_FIELDS = process.env.ALPHA_EXPERIMENTAL_FIELDS === "true";
 const ALPHA_CROWDING_PATTERN_THRESHOLD = clampInt(process.env.ALPHA_CROWDING_PATTERN_THRESHOLD, 2, 1, 20);
 const ALPHA_FAMILY_COOLDOWN_ROUNDS = clampInt(process.env.ALPHA_FAMILY_COOLDOWN_ROUNDS, 3, 1, 20);
+const QUALITY_GUARDRAIL_WINDOW_RUNS = clampInt(process.env.QUALITY_GUARDRAIL_WINDOW_RUNS, 3, 2, 12);
+const QUALITY_GUARDRAIL_MIN_RUNS = clampInt(
+  process.env.QUALITY_GUARDRAIL_MIN_RUNS,
+  QUALITY_GUARDRAIL_WINDOW_RUNS * 2,
+  QUALITY_GUARDRAIL_WINDOW_RUNS * 2,
+  40,
+);
+const QUALITY_GUARDRAIL_AUTOROLLBACK = process.env.QUALITY_GUARDRAIL_AUTOROLLBACK !== "false";
+const SCHEDULER_PLAN_CACHE_RUNS = clampInt(process.env.SCHEDULER_PLAN_CACHE_RUNS, 2, 0, 10);
+const SCHEDULER_PLAN_CONTEXT_REPAIR_LIMIT = clampInt(process.env.SCHEDULER_PLAN_CONTEXT_REPAIR_LIMIT, 8, 2, 40);
+const SCHEDULER_PLAN_CONTEXT_EVENT_LIMIT = clampInt(process.env.SCHEDULER_PLAN_CONTEXT_EVENT_LIMIT, 12, 4, 80);
+const SCHEDULER_OBJECTIVE_TEMPLATE_FIRST = process.env.SCHEDULER_OBJECTIVE_TEMPLATE_FIRST !== "false";
+const SCHEDULER_OBJECTIVE_LLM_ON_DEMAND = process.env.SCHEDULER_OBJECTIVE_LLM_ON_DEMAND !== "false";
 
 // Dynamic objective: category → relevant BRAIN fields
 const CATEGORY_FIELDS = {
@@ -111,6 +139,16 @@ const schedulerState = {
   lastRunId: null,
   lastSkipReason: null,
   nextRunAt: null,
+  qualityGuardrail: null,
+  plannerCache: {
+    contextHash: null,
+    plan: null,
+    remainingRuns: 0,
+    updatedAt: null,
+    lastUsedAt: null,
+    invalidatedAt: null,
+    invalidatedReason: null,
+  },
 };
 
 const SERVER_START_TIME = new Date().toISOString();
@@ -189,7 +227,6 @@ const server = createServer(async (req, res) => {
 
     if (req.method === "GET" && url.pathname === "/runs") {
       const response = await buildRunsIndex(authContext);
-      response.llmRouterState = await readLlmRouterState();
       return sendJson(res, 200, response);
     }
 
@@ -299,6 +336,7 @@ const server = createServer(async (req, res) => {
         if (["VERIFY","CASH"].includes(s.unitHandling)) merged.unitHandling = s.unitHandling;
         schedulerState.simulationSettings = merged;
       }
+      invalidatePlannerCache("scheduler-manual-update");
       scheduleNextRun("scheduler-update");
       void saveSchedulerState();
       return sendJson(res, 200, publicSchedulerState());
@@ -375,6 +413,7 @@ setInterval(() => {
   void tickScheduler().catch((error) => {
     schedulerState.lastSkipReason = `Scheduler error: ${error instanceof Error ? error.message : String(error)}`;
     schedulerState.lastErrorAt = new Date().toISOString();
+    invalidatePlannerCache("scheduler-error");
     scheduleNextRun("scheduler-error");
     pushAutoLoopEvent({
       type: "scheduler-error",
@@ -410,6 +449,12 @@ async function createRun(input, source, authContext = systemAuthContext()) {
   }
 
   await mkdir(outputDir, { recursive: true });
+  const qualityGuardrail = await evaluateQualityGuardrail();
+  schedulerState.qualityGuardrail = qualityGuardrail;
+  autoLoopState.qualityGuardrail = qualityGuardrail;
+  const llmOptimizationProfile = qualityGuardrailEnvOverrides(qualityGuardrail?.status);
+  void saveSchedulerState();
+  void saveAutoLoopState();
   let repairContextPath = null;
   if (input.repairContext) {
     repairContextPath = path.join(outputDir, "repair-context.json");
@@ -426,6 +471,8 @@ async function createRun(input, source, authContext = systemAuthContext()) {
     batchSize,
     concurrency,
     generatorStrategy: ALPHA_GENERATOR_STRATEGY,
+    qualityGuardrailStatus: qualityGuardrail?.status ?? null,
+    llmOptimizationProfile: Object.keys(llmOptimizationProfile),
     credentialSource: credentialEnv.source,
     startedAt: now.toISOString(),
   });
@@ -439,6 +486,7 @@ async function createRun(input, source, authContext = systemAuthContext()) {
         ...process.env,
         PYTHONPATH: path.resolve(__dirname, ".."),
         ...credentialEnv.env,
+        ...llmOptimizationProfile,
       },
       stdio: ["ignore", "pipe", "pipe"],
     },
@@ -477,9 +525,7 @@ async function createRun(input, source, authContext = systemAuthContext()) {
     if (isRepair) process.stderr.write(`[py-repair ${runId.slice(-8)}] ${text}`);
   });
   child.on("exit", (code) => {
-    state.status = code === 0 ? "completed" : "failed";
-    state.exitCode = code;
-    state.finishedAt = new Date().toISOString();
+    finalizeRunExit(activeRuns, state, code);
     if (source === "scheduler") scheduleNextRun("run-finished");
     void handleRunFinished(state).catch((error) => {
       pushAutoLoopEvent({
@@ -498,27 +544,7 @@ async function createRun(input, source, authContext = systemAuthContext()) {
 // Returns {category, field} choosing least-recently-used category first,
 // then a random field from that category's field list.
 function pickNextTarget() {
-  const categories = Object.keys(CATEGORY_FIELDS);
-  // Count recent uses per category (last 20 entries)
-  const recent = objectiveHistory.slice(-20);
-  const counts = {};
-  for (const cat of categories) counts[cat] = 0;
-  for (const entry of recent) {
-    if (entry.category && counts[entry.category] !== undefined) counts[entry.category]++;
-  }
-  // Sort ascending by count; ties broken by shuffle
-  const sorted = categories.slice().sort((a, b) => counts[a] - counts[b]);
-  // Pick the least used; if tied, pick randomly among tied
-  const minCount = counts[sorted[0]];
-  const tied = sorted.filter(c => counts[c] === minCount);
-  const category = tied[Math.floor(Math.random() * tied.length)];
-  const fields = CATEGORY_FIELDS[category];
-  // Avoid repeating the last-used field for this category
-  const lastField = objectiveHistory.slice().reverse().find(e => e.category === category)?.field;
-  const available = fields.filter(f => f !== lastField);
-  const fieldPool = available.length ? available : fields;
-  const field = fieldPool[Math.floor(Math.random() * fieldPool.length)];
-  return { category, field };
+  return pickNextObjectiveTarget(objectiveHistory, CATEGORY_FIELDS);
 }
 
 // Save persistent objective history file (fire-and-forget)
@@ -528,14 +554,22 @@ function saveObjectiveHistory() {
   writeFile(OBJECTIVE_HISTORY_PATH, JSON.stringify(trimmed, null, 2)).catch(() => {});
 }
 
-// Generate a specific, creative mining objective using GPT-4o-mini.
-// Falls back to a template string if OpenAI is unavailable.
+// Generate scheduled objective with template-first strategy.
+// Only call LLM on demand when diversification is needed.
 async function generateScheduledObjective() {
   const { category, field } = pickNextTarget();
-  const recentObjectives = objectiveHistory.slice(-5).map(e => e.objective).join("; ");
+  const recentObjectiveList = objectiveHistory.slice(-6).map((entry) => String(entry.objective ?? "").trim()).filter(Boolean);
+  const recentObjectives = recentObjectiveList.join("; ");
 
-  let objective;
-  if (process.env.OPENAI_API_KEY) {
+  let objective = buildTemplateObjective(category, field);
+  const needsDiversification = objectiveNeedsDiversification(objective, recentObjectiveList);
+  const shouldTryLLM =
+    SCHEDULER_OBJECTIVE_LLM_ON_DEMAND &&
+    Boolean(process.env.OPENAI_API_KEY) &&
+    (!SCHEDULER_OBJECTIVE_TEMPLATE_FIRST || needsDiversification);
+
+  let source = "template";
+  if (shouldTryLLM) {
     try {
       const systemPrompt =
         "You are a WorldQuant BRAIN quantitative researcher. Generate a concise, specific alpha mining objective (1-2 sentences) for the given category and data field. " +
@@ -564,29 +598,32 @@ async function generateScheduledObjective() {
       });
       const payload = await resp.json().catch(() => null);
       const content = payload?.choices?.[0]?.message?.content?.trim();
-      if (content) objective = content;
+      if (content) {
+        objective = content;
+        source = "llm";
+      }
     } catch (_) {}
   }
 
-  // Fallback template when OpenAI is unavailable
-  if (!objective) {
-    const templates = {
-      QUALITY:        `Discover robust ${field}-based quality signals with low crowding and positive out-of-sample stability`,
-      MOMENTUM:       `Identify short-to-medium horizon momentum patterns using ${field} with sector neutralization`,
-      REVERSAL:       `Mine mean-reversion alphas from ${field} anomalies with low turnover and high Sharpe`,
-      VOLATILITY:     `Explore volatility-adjusted ${field} signals that predict cross-sectional return dispersion`,
-      LIQUIDITY:      `Find ${field}-driven liquidity premium signals with stable risk-adjusted returns`,
-      MICROSTRUCTURE: `Discover intraday microstructure patterns in ${field} that predict next-day returns`,
-      SENTIMENT:      `Extract sentiment-driven mispricings using ${field} with earnings surprise confirmation`,
-    };
-    objective = templates[category] ?? `Discover robust ${category.toLowerCase()} alphas using ${field}`;
-  }
-
   // Record to history
-  objectiveHistory.push({ at: new Date().toISOString(), category, field, objective });
+  objectiveHistory.push({ at: new Date().toISOString(), category, field, objective, source });
   saveObjectiveHistory();
 
   return objective;
+}
+
+function buildTemplateObjective(category, field) {
+  const variantIndex = pickTemplateVariantIndex(category, field, objectiveHistory);
+  return buildDiversifiedTemplateObjective(category, field, variantIndex);
+}
+
+function objectiveNeedsDiversification(candidate, recentObjectives) {
+  if (recentObjectives.length === 0) return !SCHEDULER_OBJECTIVE_TEMPLATE_FIRST;
+  return objectiveNeedsDiversificationWithHistory(candidate, recentObjectives, CATEGORY_FIELDS);
+}
+
+function normalizeObjectiveKey(text) {
+  return JSON.stringify(normalizeObjectiveSignature(text, CATEGORY_FIELDS));
 }
 
 function normalizePlannerPlan(parsed) {
@@ -656,37 +693,26 @@ function normalizePlannerPlan(parsed) {
   };
 }
 
-async function planNextRunWithLLM() {
+async function planNextRunWithLLM(qualityGuardrail = schedulerState.qualityGuardrail) {
   try {
     if (!process.env.OPENAI_API_KEY) {
       throw new Error("OPENAI_API_KEY is not configured.");
     }
 
     const alphaLibrary = await buildAlphaLibrary();
-    const categoryCounts = {};
-    let sharpeSum = 0;
-    let sharpeCount = 0;
-    for (const entry of alphaLibrary.entries) {
-      const category = entry.category || "UNKNOWN";
-      categoryCounts[category] = (categoryCounts[category] ?? 0) + 1;
-      const sharpe = Number(entry.sharpe);
-      if (Number.isFinite(sharpe)) {
-        sharpeSum += sharpe;
-        sharpeCount += 1;
-      }
-    }
+    const context = buildPlannerContext(alphaLibrary, qualityGuardrail);
+    const contextHash = plannerContextHash(context);
 
-    const context = {
-      currentSimulationSettings: schedulerState.simulationSettings,
-      repairHistory: (autoLoopState.repairHistory ?? []).slice(-20),
-      alphaLibrary: {
-        total: alphaLibrary.total,
-        categoryCounts,
-        avgSharpe: sharpeCount ? Number((sharpeSum / sharpeCount).toFixed(4)) : null,
-      },
-      events: (autoLoopState.events ?? []).slice(-30),
-      engine: schedulerState.engine,
-    };
+    const cachedPlan = readPlannerCache(contextHash, qualityGuardrail?.status);
+    if (cachedPlan) {
+      autoLoopState.llmPlan = {
+        ...cachedPlan,
+        decidedAt: schedulerState.plannerCache.lastUsedAt,
+        source: "cache",
+      };
+      await saveAutoLoopState();
+      return cachedPlan;
+    }
 
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
@@ -717,7 +743,8 @@ async function planNextRunWithLLM() {
 
     const parsed = JSON.parse(content);
     const plan = normalizePlannerPlan(parsed);
-    autoLoopState.llmPlan = { ...parsed, ...plan, decidedAt: new Date().toISOString() };
+    writePlannerCache(contextHash, plan);
+    autoLoopState.llmPlan = { ...parsed, ...plan, decidedAt: new Date().toISOString(), source: "llm" };
     await saveAutoLoopState();
     return plan;
   } catch (error) {
@@ -726,11 +753,140 @@ async function planNextRunWithLLM() {
   }
 }
 
+function buildPlannerContext(alphaLibrary, qualityGuardrail) {
+  const categoryCounts = {};
+  const sharpeValues = [];
+  for (const entry of alphaLibrary.entries) {
+    const category = entry.category || "UNKNOWN";
+    categoryCounts[category] = (categoryCounts[category] ?? 0) + 1;
+    const sharpe = Number(entry.sharpe);
+    if (Number.isFinite(sharpe)) sharpeValues.push(sharpe);
+  }
+  const topCategories = Object.entries(categoryCounts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 6)
+    .map(([category, count]) => ({ category, count }));
+  const avgSharpe = sharpeValues.length
+    ? Number((sharpeValues.reduce((sum, item) => sum + item, 0) / sharpeValues.length).toFixed(4))
+    : null;
+
+  return {
+    engine: schedulerState.engine,
+    mode: schedulerState.mode,
+    currentSimulationSettings: schedulerState.simulationSettings,
+    qualityGuardrail: qualityGuardrail
+      ? {
+          status: qualityGuardrail.status,
+          reason: qualityGuardrail.reason ?? null,
+        }
+      : null,
+    alphaLibrary: {
+      total: alphaLibrary.total,
+      avgSharpe,
+      topCategories,
+    },
+    repairSummary: summarizeRepairHistoryForPlanner(autoLoopState.repairHistory ?? []),
+    events: summarizeEventsForPlanner(autoLoopState.events ?? []),
+    recentObjectives: objectiveHistory.slice(-5).map((entry) => ({
+      at: entry.at ?? null,
+      category: entry.category ?? null,
+      field: entry.field ?? null,
+      source: entry.source ?? null,
+    })),
+  };
+}
+
+function summarizeRepairHistoryForPlanner(history) {
+  const recent = history.slice(-SCHEDULER_PLAN_CONTEXT_REPAIR_LIMIT);
+  const outcomes = {};
+  for (const item of recent) {
+    const outcome = String(item?.outcome ?? "unknown");
+    outcomes[outcome] = (outcomes[outcome] ?? 0) + 1;
+  }
+  return {
+    totalRecent: recent.length,
+    outcomes,
+    recent: recent.map((item) => ({
+      outcome: item?.outcome ?? null,
+      repairDepth: item?.repairDepth ?? null,
+      failedChecks: Array.isArray(item?.failedChecks) ? item.failedChecks.slice(0, 4) : [],
+      isSharpe: toNumber(item?.bestMetrics?.isSharpe),
+      fitness: toNumber(item?.bestMetrics?.fitness),
+      turnover: toNumber(item?.bestMetrics?.turnover),
+    })),
+  };
+}
+
+function summarizeEventsForPlanner(events) {
+  return events.slice(-SCHEDULER_PLAN_CONTEXT_EVENT_LIMIT).map((event) => ({
+    type: event?.type ?? null,
+    runId: event?.runId ?? null,
+    source: event?.source ?? null,
+    ownerId: event?.ownerId ?? null,
+    at: event?.at ?? null,
+    error: event?.error ?? null,
+  }));
+}
+
+function plannerContextHash(context) {
+  return simpleHash(JSON.stringify(context));
+}
+
+function readPlannerCache(contextHash, qualityStatus) {
+  if (SCHEDULER_PLAN_CACHE_RUNS <= 0) return null;
+  if (qualityStatus === "degraded") return null;
+  const cache = schedulerState.plannerCache ?? {};
+  if (!cache.plan || cache.contextHash !== contextHash) return null;
+  const remaining = Number(cache.remainingRuns ?? 0);
+  if (!Number.isFinite(remaining) || remaining <= 0) return null;
+  cache.remainingRuns = remaining - 1;
+  cache.lastUsedAt = new Date().toISOString();
+  schedulerState.plannerCache = cache;
+  void saveSchedulerState();
+  return cache.plan;
+}
+
+function writePlannerCache(contextHash, plan) {
+  if (SCHEDULER_PLAN_CACHE_RUNS <= 0) return;
+  const nowIso = new Date().toISOString();
+  schedulerState.plannerCache = {
+    contextHash,
+    plan,
+    remainingRuns: Math.max(0, SCHEDULER_PLAN_CACHE_RUNS - 1),
+    updatedAt: nowIso,
+    lastUsedAt: nowIso,
+    invalidatedAt: null,
+    invalidatedReason: null,
+  };
+  void saveSchedulerState();
+}
+
+function invalidatePlannerCache(reason) {
+  const cache = schedulerState.plannerCache ?? {};
+  schedulerState.plannerCache = {
+    ...cache,
+    plan: null,
+    contextHash: null,
+    remainingRuns: 0,
+    invalidatedAt: new Date().toISOString(),
+    invalidatedReason: reason,
+  };
+  void saveSchedulerState();
+}
+
 async function tickScheduler() {
   schedulerState.lastTickAt = new Date().toISOString();
+  await recoverStalledRuns();
   const qLen = autoLoopState.queue?.length ?? 0;
   const hasActive = !!autoLoopState.activeRepair;
   console.log(`[tick] ${schedulerState.lastTickAt} enabled=${schedulerState.enabled} repairQueue=${qLen} activeRepair=${hasActive} runningRuns=${runningRuns().length}`);
+  const qualityGuardrail = await evaluateQualityGuardrail();
+  schedulerState.qualityGuardrail = qualityGuardrail;
+  autoLoopState.qualityGuardrail = qualityGuardrail;
+  if (qualityGuardrail.status === "degraded") {
+    invalidatePlannerCache("quality-guardrail-degraded");
+  }
+  await saveAutoLoopState();
 
   // Heal any stuck activeRepair first (e.g. createRun threw before spawning the process)
   if (AUTO_REPAIR_ENABLED) await recoverStuckActiveRepair();
@@ -753,7 +909,7 @@ async function tickScheduler() {
     return;
   }
 
-  const plan = await planNextRunWithLLM();
+  const plan = await planNextRunWithLLM(qualityGuardrail);
   console.log("[planner] LLM strategy: " + (plan?.objective || "").slice(0, 80));
   const dynamicObjective = plan ? null : await generateScheduledObjective();
   const runObjective = plan?.objective || dynamicObjective;
@@ -798,20 +954,36 @@ function scheduleNextRun(reason) {
 async function buildRunsIndex(authContext = systemAuthContext()) {
   const dirs = await visibleRunDirs(await listRunDirs(RUNS_DIR), authContext);
   const diversityStats = await latestDiversityStats(dirs);
+  const qualityGuardrail = await evaluateQualityGuardrail(dirs);
+  const recent = await Promise.all(dirs.sort().reverse().slice(0, 30).map((runId) => readRun(runId, true)));
+  const llmRouterStateRaw = await readLlmRouterState();
+  const flatProviders = flattenProviderEntries(llmRouterStateRaw?.providers);
+  const llmRouterState = llmRouterStateRaw
+    ? {
+        ...llmRouterStateRaw,
+        dashboardProviders: flatProviders.map((provider) => ({
+          ...provider,
+          dashboard: formatProviderWinRate(provider),
+        })),
+        diagnoseStatus: summarizeDiagnoseProvider(flatProviders, recent),
+      }
+    : null;
+  schedulerState.qualityGuardrail = qualityGuardrail;
+  autoLoopState.qualityGuardrail = qualityGuardrail;
   const activeList = [...activeRuns.values()].filter((run) => run.status === "running" && canAccessOwner(authContext, run.ownerId));
   // Annotate python-v2 active runs with live progress stats from progress.jsonl
   await Promise.all(activeList.map(async (run) => {
-    if (run.engine !== "legacy-js") {
-      run.progressStats = await readRunProgressStats(run.outputDir);
-    }
+    await refreshRunProgressStats(run);
   }));
   return {
     active: activeList,
-    recent: await Promise.all(dirs.sort().reverse().slice(0, 30).map((runId) => readRun(runId, true))),
+    recent,
     storedRuns: dirs.sort().reverse(),
     scheduler: publicSchedulerState(),
     autoLoop: publicAutoLoopState(authContext),
     diversityStats,
+    qualityGuardrail,
+    llmRouterState,
   };
 }
 
@@ -1028,6 +1200,120 @@ async function latestDiversityStats(runDirs) {
     if (batch?.diversityStats) return batch.diversityStats;
   }
   return null;
+}
+
+async function evaluateQualityGuardrail(runDirs = null) {
+  const dirs = Array.isArray(runDirs) ? runDirs : await listRunDirs(RUNS_DIR);
+  const completed = [];
+  for (const runId of [...dirs].sort().reverse()) {
+    const summary = await maybeReadJson(path.join(RUNS_DIR, runId, "summary.json"));
+    if (!summary || !["evaluate", "loop"].includes(summary.mode)) continue;
+    const qualifiedAlphas = Number(summary.qualified_alphas_count);
+    const totalSimulations = Number(summary.total_brain_simulations);
+    const gatePassRate = Number.isFinite(qualifiedAlphas) && Number.isFinite(totalSimulations) && totalSimulations > 0
+      ? qualifiedAlphas / totalSimulations
+      : null;
+    const testSharpeMedian = extractSummaryTestSharpeMedian(summary);
+    completed.push({
+      runId,
+      qualifiedAlphas: Number.isFinite(qualifiedAlphas) ? qualifiedAlphas : 0,
+      gatePassRate,
+      testSharpeMedian,
+    });
+    if (completed.length >= QUALITY_GUARDRAIL_WINDOW_RUNS * 2) break;
+  }
+
+  if (completed.length < QUALITY_GUARDRAIL_MIN_RUNS) {
+    return {
+      status: "insufficient_data",
+      reason: `Need at least ${QUALITY_GUARDRAIL_MIN_RUNS} completed evaluate/loop runs.`,
+      sampleSize: completed.length,
+      windowRuns: QUALITY_GUARDRAIL_WINDOW_RUNS,
+      latest: null,
+      baseline: null,
+      degradedMetrics: [],
+    };
+  }
+
+  const latest = completed.slice(0, QUALITY_GUARDRAIL_WINDOW_RUNS);
+  const baseline = completed.slice(QUALITY_GUARDRAIL_WINDOW_RUNS, QUALITY_GUARDRAIL_WINDOW_RUNS * 2);
+  if (baseline.length < QUALITY_GUARDRAIL_WINDOW_RUNS) {
+    return {
+      status: "insufficient_data",
+      reason: "Not enough baseline runs for quality comparison.",
+      sampleSize: completed.length,
+      windowRuns: QUALITY_GUARDRAIL_WINDOW_RUNS,
+      latest: aggregateQualityWindow(latest),
+      baseline: null,
+      degradedMetrics: [],
+    };
+  }
+
+  const latestAgg = aggregateQualityWindow(latest);
+  const baselineAgg = aggregateQualityWindow(baseline);
+  const degradedMetrics = [];
+  if (latestAgg.avgQualifiedAlphas < baselineAgg.avgQualifiedAlphas) degradedMetrics.push("qualified_alphas_count");
+  if (latestAgg.avgGatePassRate < baselineAgg.avgGatePassRate) degradedMetrics.push("gate_pass_rate");
+  if (
+    Number.isFinite(latestAgg.medianTestSharpe) &&
+    Number.isFinite(baselineAgg.medianTestSharpe) &&
+    latestAgg.medianTestSharpe < baselineAgg.medianTestSharpe
+  ) {
+    degradedMetrics.push("testSharpe_median");
+  }
+  return {
+    status: degradedMetrics.length > 0 ? "degraded" : "ok",
+    reason: degradedMetrics.length > 0 ? `Degraded metrics: ${degradedMetrics.join(", ")}` : "Quality metrics stable.",
+    sampleSize: completed.length,
+    windowRuns: QUALITY_GUARDRAIL_WINDOW_RUNS,
+    latest: latestAgg,
+    baseline: baselineAgg,
+    degradedMetrics,
+  };
+}
+
+function aggregateQualityWindow(records) {
+  const qualified = records.map((item) => Number(item.qualifiedAlphas)).filter(Number.isFinite);
+  const gate = records.map((item) => Number(item.gatePassRate)).filter(Number.isFinite);
+  const testSharpe = records.map((item) => Number(item.testSharpeMedian)).filter(Number.isFinite);
+  return {
+    runs: records.length,
+    runIds: records.map((item) => item.runId),
+    avgQualifiedAlphas: qualified.length ? Number((qualified.reduce((s, v) => s + v, 0) / qualified.length).toFixed(4)) : 0,
+    avgGatePassRate: gate.length ? Number((gate.reduce((s, v) => s + v, 0) / gate.length).toFixed(6)) : 0,
+    medianTestSharpe: median(testSharpe),
+  };
+}
+
+function extractSummaryTestSharpeMedian(summary) {
+  const candidates = Array.isArray(summary?.topCandidates) ? summary.topCandidates : [];
+  const values = [];
+  for (const candidate of candidates) {
+    const metrics = candidate?.metrics ?? {};
+    const testSharpe = toNumber(metrics?.test_sharpe ?? metrics?.testSharpe ?? candidate?.testSharpe);
+    if (Number.isFinite(testSharpe)) values.push(testSharpe);
+  }
+  return median(values);
+}
+
+function median(values) {
+  const clean = values.filter(Number.isFinite).sort((a, b) => a - b);
+  if (!clean.length) return null;
+  const mid = Math.floor(clean.length / 2);
+  if (clean.length % 2 === 1) return Number(clean[mid].toFixed(6));
+  return Number(((clean[mid - 1] + clean[mid]) / 2).toFixed(6));
+}
+
+function qualityGuardrailEnvOverrides(status) {
+  if (!QUALITY_GUARDRAIL_AUTOROLLBACK || status !== "degraded") return {};
+  return {
+    LLM_OPTIMIZED_GENERATION_ENABLED: "false",
+    LLM_SECOND_PASS_ENABLED: "true",
+    LLM_COMPACT_CONTEXT_ENABLED: "false",
+    LLM_JUDGE_MIN_POOL_FACTOR: "1.2",
+    REPAIR_DISTILL_EVERY_N: "1",
+    KNOWLEDGE_DISTILL_EVERY_N: "1",
+  };
 }
 
 async function readRunDiversityStats(outputDir) {
@@ -1480,6 +1766,9 @@ function ideaPath(ideaId) {
 }
 
 async function handleRunFinished(runState) {
+  if (runState.status !== "completed") {
+    invalidatePlannerCache(`run-${runState.status}`);
+  }
   if (!AUTO_REPAIR_ENABLED && !AUTO_SUBMIT_ENABLED) return;
   autoLoopState.diversityStats = (await readRunDiversityStats(runState.outputDir)) ?? autoLoopState.diversityStats ?? null;
   if (!["evaluate", "loop"].includes(runState.mode)) {
@@ -1518,6 +1807,7 @@ async function handleRunFinished(runState) {
 
   // Target met (Sharpe ≥ 1.25, fitness ≥ 1.0, turnover ≤ 70%) — stop repairing, count as success
   if (targetMet) {
+    console.log(`[handleRunFinished] targetMet=true best=${JSON.stringify(bestMetrics)}`);
     if (runState.source === "repair") {
       pushRepairHistory({ alphaId: runState.parentAlphaId, expression: autoLoopState.activeRepair?.expression ?? null, failedChecks: autoLoopState.activeRepair?.failedChecks ?? [], repairDepth: runState.repairDepth ?? 0, outcome: "target-met", runId: runState.runId, bestMetrics });
       await clearActiveRepair(runState.runId);
@@ -1544,9 +1834,10 @@ async function handleRunFinished(runState) {
   const repairCandidates = chooseRepairCandidates(candidates, 1);
   if (repairCandidates.length > 0) {
     const source = runState.source === "repair" ? "repair-run-finished" : "run-finished";
+    const enqueueResults = [];
     for (const candidate of repairCandidates) {
       const gate = evaluateCandidateGate(candidate);
-      await enqueueRepairFromGate({
+      const enqueueResult = await enqueueRepairFromGate({
         alpha: summarizeCandidateAsAlpha(candidate),
         gate,
         source,
@@ -1556,11 +1847,18 @@ async function handleRunFinished(runState) {
         ownerId: runState.ownerId,
         _category: candidate._category ?? null,
       });
+      enqueueResults.push({
+        alphaId: candidate.alphaId ?? null,
+        queued: enqueueResult.queued,
+        reason: enqueueResult.reason ?? null,
+      });
     }
+    console.log(`[handleRunFinished] repairDispatch=${JSON.stringify(enqueueResults)}`);
     if (runState.source === "repair") {
       pushRepairHistory({ alphaId: runState.parentAlphaId, expression: autoLoopState.activeRepair?.expression ?? null, failedChecks: autoLoopState.activeRepair?.failedChecks ?? [], repairDepth: runState.repairDepth ?? 0, outcome: "re-queued", runId: runState.runId, bestMetrics });
     }
   } else {
+    console.log("[handleRunFinished] no repair candidates after gate evaluation");
     pushAutoLoopEvent({ type: "no-repair-candidate", runId: runState.runId, ownerId: runState.ownerId });
     if (runState.source === "repair") {
       pushRepairHistory({ alphaId: runState.parentAlphaId, expression: autoLoopState.activeRepair?.expression ?? null, failedChecks: autoLoopState.activeRepair?.failedChecks ?? [], repairDepth: runState.repairDepth ?? 0, outcome: "no-candidate", runId: runState.runId, bestMetrics });
@@ -1650,6 +1948,41 @@ function buildRepairQueueItem({ alpha, gate, source, sourceRunId, repairDepth, r
     createdAt,
     updatedAt: createdAt,
   };
+}
+
+async function refreshRunProgressStats(run) {
+  if (!run || run.engine === "legacy-js") return run?.progressStats ?? null;
+  run.progressStats = await readRunProgressStats(run.outputDir);
+  return run.progressStats;
+}
+
+async function recoverStalledRuns() {
+  const stallMs = ACTIVE_RUN_STALL_MINUTES * 60_000;
+  for (const run of runningRuns()) {
+    await refreshRunProgressStats(run);
+    const liveness = describeRunLiveness(run, { stallMs });
+    if (!liveness.stalled) continue;
+    run.status = "failed";
+    run.finishedAt = new Date().toISOString();
+    run.stalled = true;
+    run.stallReason = `No progress for ${Math.round((liveness.inactivityMs ?? 0) / 60000)} minutes`;
+    pushAutoLoopEvent({
+      type: "run-stalled",
+      runId: run.runId,
+      ownerId: run.ownerId,
+      inactivityMs: liveness.inactivityMs ?? null,
+      lastActivityAt: liveness.lastActivityAt,
+    });
+    if (run.source === "repair") {
+      await clearActiveRepair(run.runId);
+    }
+    try {
+      process.kill(run.pid, "SIGTERM");
+    } catch {}
+    console.error(
+      `[run-stalled] runId=${run.runId} owner=${run.ownerId} lastActivityAt=${liveness.lastActivityAt ?? "unknown"} inactivityMs=${liveness.inactivityMs ?? "unknown"}`,
+    );
+  }
 }
 
 // Recover from stuck activeRepair: if it points to a runId that is no longer running
@@ -2012,6 +2345,7 @@ function publicAutoLoopState(authContext = systemAuthContext()) {
     repairHistory: (autoLoopState.repairHistory ?? []).slice(-20).reverse(),
     diversityStats: autoLoopState.diversityStats ?? null,
     llmPlan: autoLoopState.llmPlan ?? null,
+    qualityGuardrail: autoLoopState.qualityGuardrail ?? null,
     lastAction: autoLoopState.lastAction,
     statePath: AUTO_LOOP_STATE_PATH,
   };
@@ -2027,6 +2361,7 @@ async function loadAutoLoopState() {
     repairHistory: Array.isArray(persisted?.repairHistory) ? persisted.repairHistory.slice(-50) : [],
     diversityStats: persisted?.diversityStats ?? null,
     llmPlan: persisted?.llmPlan ?? null,
+    qualityGuardrail: persisted?.qualityGuardrail ?? null,
     lastAction: persisted?.lastAction ?? null,
   };
 }
@@ -2051,6 +2386,8 @@ async function saveSchedulerState() {
     batchSize: schedulerState.batchSize,
     concurrency: schedulerState.concurrency,
     simulationSettings: schedulerState.simulationSettings,
+    plannerCache: schedulerState.plannerCache,
+    qualityGuardrail: schedulerState.qualityGuardrail,
   };
   await writeFile(SCHEDULER_STATE_PATH, `${JSON.stringify(toSave, null, 2)}\n`, "utf8");
 }
@@ -2067,6 +2404,15 @@ async function loadSchedulerState() {
   if (typeof saved.batchSize === "number") schedulerState.batchSize = saved.batchSize;
   if (typeof saved.concurrency === "number") schedulerState.concurrency = clampInt(saved.concurrency, schedulerState.concurrency, 1, 3);
   if (saved.simulationSettings && typeof saved.simulationSettings === "object") schedulerState.simulationSettings = { ...DEFAULT_SIM_SETTINGS, ...saved.simulationSettings };
+  if (saved.plannerCache && typeof saved.plannerCache === "object") {
+    schedulerState.plannerCache = {
+      ...schedulerState.plannerCache,
+      ...saved.plannerCache,
+    };
+  }
+  if (saved.qualityGuardrail && typeof saved.qualityGuardrail === "object") {
+    schedulerState.qualityGuardrail = saved.qualityGuardrail;
+  }
 }
 
 function pushAutoLoopEvent(event) {
@@ -2296,6 +2642,8 @@ function publicSchedulerState() {
     lastSkipReason: schedulerState.lastSkipReason,
     nextRunAt: schedulerState.nextRunAt,
     lastScheduleReason: schedulerState.lastScheduleReason,
+    qualityGuardrail: schedulerState.qualityGuardrail,
+    plannerCache: schedulerState.plannerCache,
     authRequired: Boolean(ADMIN_TOKEN || DASHBOARD_USERS.size),
     multiUserConfigured: DASHBOARD_USERS.size > 0,
     schedulerOwnerId: AUTO_RUN_OWNER_ID,
@@ -2501,6 +2849,8 @@ async function brainCredentialEnv(ownerId) {
     env: {
       WQB_EMAIL: credential.email,
       WQB_PASSWORD: credential.password,
+      BRAIN_OPERATOR_DENYLIST: String(process.env.BRAIN_OPERATOR_DENYLIST ?? ""),
+      BRAIN_OPERATOR_DENYLIST_PATH: operatorConstraintsPath(ownerId),
     },
   };
 }
@@ -2562,6 +2912,10 @@ function credentialKey() {
 
 function credentialsPath(ownerId) {
   return path.join(CREDENTIALS_DIR, `${sanitizeOwnerId(ownerId)}.json`);
+}
+
+function operatorConstraintsPath(ownerId) {
+  return path.join(CREDENTIALS_DIR, `${sanitizeOwnerId(ownerId)}-operator-constraints.json`);
 }
 
 function maskEmail(email) {
@@ -2672,10 +3026,12 @@ async function readRunProgressStats(outputDir) {
     const text = await readFile(path.join(outputDir, "progress.jsonl"), "utf8");
     const lines = text.trim().split(/\r?\n/).filter(Boolean);
     let nGen = 0, nSim = 0, nGate = 0;
+    let lastEventAt = null;
     const recentEvents = [];
     for (const line of lines) {
       const e = safeJson(line);
       if (!e) continue;
+      if (e.at && Number.isFinite(Date.parse(e.at))) lastEventAt = e.at;
       if (e.stage === "evaluated") nSim++;
       if (e.stage === "rejected") nGen++;
       // Build log entry: keep raw ISO timestamp so browser can format in local timezone
@@ -2697,6 +3053,7 @@ async function readRunProgressStats(outputDir) {
       else if (e.stage === "rejected") msg = `验证拒绝 ${e.candidate_id ?? ""} ${(e.errors ?? []).slice(0,2).join("; ")}`;
       else if (e.stage === "blocked") msg = `⚠️ 阻塞: ${e.reason ?? ""}`;
       else if (e.stage === "waiting") msg = `⏳ 等待配额: ${e.reason ?? ""}`;
+      else if (e.stage === "operator_blocked") msg = `🚫 算子禁用 ${e.operator ?? ""}: ${String(e.reason ?? "").slice(0, 60)}`;
       else if (e.stage === "finished") msg = `完成 gen=${e.summary?.generatedCandidates ?? 0} sim=${e.summary?.total_brain_simulations ?? 0}`;
       else msg = `${e.stage}`;
       // Push {ts, msg} so the browser formats time in its local timezone
@@ -2706,7 +3063,7 @@ async function readRunProgressStats(outputDir) {
     // pick up qualified count from pool.json if already written
     const pool = await maybeReadJson(path.join(outputDir, "pool.json"));
     if (pool) nGate = pool.qualified ?? 0;
-    return { nGen, nSim, nGate, recentEvents: recentEvents.slice(-30) };
+    return { nGen, nSim, nGate, lastEventAt, recentEvents: recentEvents.slice(-30) };
   } catch {
     return null;
   }
@@ -2935,7 +3292,7 @@ function dashboardHtml() {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="dashboard-token" content="${process.env.ADMIN_TOKEN ?? process.env.DASHBOARD_TOKEN ?? ''}">
+<meta name="dashboard-token" content="">
 <meta name="registration-code-required" content="${REGISTRATION_CODE ? 'true' : 'false'}">
 <title>QuantBrain</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -3257,6 +3614,7 @@ body{display:flex}
         <div class="llm-list" id="llm-list">
           <div style="font-size:12px;color:var(--t3)">加载中…</div>
         </div>
+        <div id="llm-router-note" style="font-size:11px;color:var(--t3);margin-top:10px"></div>
       </div>
       <div class="box">
         <div class="cd-wrap">
@@ -3752,31 +4110,48 @@ body{display:flex}
 
       // LLM rows
       var ll = $('llm-list');
+      var llNote = $('llm-router-note');
       if (ll && lr && lr.providers) {
-        // Flatten nested {name:{role:{...provider}}} into flat list
-        var flatProviders = [];
-        Object.entries(lr.providers).forEach(function(kv) {
-          var n = kv[0]; var roleMap = kv[1];
-          if (roleMap && typeof roleMap === 'object' && !('win_rate' in roleMap)) {
-            // nested: {role: providerObj}
-            Object.values(roleMap).forEach(function(p) { flatProviders.push(Object.assign({}, p, {name: n})); });
-          } else {
-            flatProviders.push(Object.assign({}, roleMap, {name: n}));
-          }
-        });
+        var flatProviders = Array.isArray(lr.dashboardProviders) && lr.dashboardProviders.length ? lr.dashboardProviders.slice() : [];
+        if (!flatProviders.length) {
+          Object.entries(lr.providers).forEach(function(kv) {
+            var n = kv[0]; var roleMap = kv[1];
+            if (roleMap && typeof roleMap === 'object' && !('win_rate' in roleMap)) {
+              Object.values(roleMap).forEach(function(p) { flatProviders.push(Object.assign({}, p, {name: n})); });
+            } else {
+              flatProviders.push(Object.assign({}, roleMap, {name: n}));
+            }
+          });
+        }
         var entries5 = flatProviders.slice(0, 5);
         var activeLlm = activeRun ? (activeRun.currentLlm || activeRun.llmProvider || '') : '';
         ll.innerHTML = entries5.map(function(p) {
           var n = p.name || '';
-          var wr = ((p.win_rate ?? 0.5) * 100).toFixed(0);
-          var col = (p.win_rate ?? 0.5) >= 0.5 ? 'var(--green)' : 'var(--amber)';
+          var dash = p.dashboard || null;
+          var wr = dash ? dash.label : (((p.win_rate ?? 0.5) * 100).toFixed(0) + '%');
+          var barWidth = dash ? dash.width : Math.max(0, Math.min(100, Math.round((p.win_rate ?? 0.5) * 100)));
+          var col = dash ? dash.colorToken : ((p.win_rate ?? 0.5) >= 0.5 ? 'var(--green)' : 'var(--amber)');
+          var detail = dash ? dash.detail : ((p.wins || 0) + '/' + (p.calls || 0) + ' 成功');
           var activeBadge = (activeLlm && n.toLowerCase().indexOf(activeLlm.toLowerCase()) >= 0) ? '<span class="llm-active-badge">ACTIVE</span>' : '';
           return '<div>' +
             '<div class="llm-row-head"><div><span class="llm-name">' + esc(n) + '</span><span class="llm-tag">' + esc(p.role || '') + '</span>' + activeBadge + '</div>' +
-            '<span class="llm-rate" style="color:' + col + '">' + wr + '%</span></div>' +
-            '<div class="bar-track"><div class="bar-fill" style="width:' + wr + '%;background:' + col + '"></div></div>' +
+            '<span class="llm-rate" style="color:' + col + '">' + wr + '</span></div>' +
+            '<div class="bar-track"><div class="bar-fill" style="width:' + barWidth + '%;background:' + col + '"></div></div>' +
+            '<div style="font-size:10px;color:var(--t3);margin-top:6px">' + esc(detail) + '</div>' +
             '</div>';
         }).join('<div style="height:12px"></div>');
+        if (llNote) {
+          var diag = lr.diagnoseStatus || null;
+          if (diag && diag.lastFailureReason) {
+            llNote.textContent = diag.name + ' 最近一次回退：' + diag.lastFailureReason;
+          } else if (diag && diag.lowSample) {
+            llNote.textContent = diag.name + ' 目前样本不足（' + diag.calls + ' 次），暂不显示胜率。';
+          } else {
+            llNote.textContent = '';
+          }
+        }
+      } else if (llNote) {
+        llNote.textContent = '';
       }
 
       // Repair queue (overview panel mini list)
@@ -3980,21 +4355,23 @@ body{display:flex}
       // Knowledge panel
       var kl = $('knowledge-llm');
       if (kl && lr && lr.providers) {
-        // Flatten nested {name:{role:{...provider}}} into flat list
-        var allProviders = [];
-        Object.entries(lr.providers).forEach(function(kv) {
-          var n = kv[0]; var roleMap = kv[1];
-          if (roleMap && typeof roleMap === 'object' && !('win_rate' in roleMap)) {
-            Object.values(roleMap).forEach(function(p) { allProviders.push(Object.assign({}, p, {name: n})); });
-          } else {
-            allProviders.push(Object.assign({}, roleMap, {name: n}));
-          }
-        });
+        var allProviders = Array.isArray(lr.dashboardProviders) && lr.dashboardProviders.length ? lr.dashboardProviders.slice() : [];
+        if (!allProviders.length) {
+          Object.entries(lr.providers).forEach(function(kv) {
+            var n = kv[0]; var roleMap = kv[1];
+            if (roleMap && typeof roleMap === 'object' && !('win_rate' in roleMap)) {
+              Object.values(roleMap).forEach(function(p) { allProviders.push(Object.assign({}, p, {name: n})); });
+            } else {
+              allProviders.push(Object.assign({}, roleMap, {name: n}));
+            }
+          });
+        }
         kl.innerHTML = '<table class="data-table"><thead><tr><th>提供商</th><th>角色</th><th>胜率</th><th>调用</th><th>成功</th></tr></thead><tbody>' +
           allProviders.map(function(p) {
-            var wr = ((p.win_rate ?? 0)*100).toFixed(1);
-            var col = (p.win_rate ?? 0) >= 0.5 ? 'var(--green)' : 'var(--amber)';
-            return '<tr><td style="color:var(--t1);font-weight:500">' + esc(p.name || '\u2013') + '</td><td>' + esc(p.role || '\u2013') + '</td><td style="color:' + col + ';font-weight:600">' + wr + '%</td><td>' + (p.calls || 0) + '</td><td>' + (p.wins || 0) + '</td></tr>';
+            var dash = p.dashboard || null;
+            var wr = dash ? dash.label : (((p.win_rate ?? 0)*100).toFixed(1) + '%');
+            var col = dash ? dash.colorToken : ((p.win_rate ?? 0) >= 0.5 ? 'var(--green)' : 'var(--amber)');
+            return '<tr><td style="color:var(--t1);font-weight:500">' + esc(p.name || '\u2013') + '</td><td>' + esc(p.role || '\u2013') + '</td><td style="color:' + col + ';font-weight:600">' + wr + '</td><td>' + (p.calls || 0) + '</td><td>' + (p.wins || 0) + '</td></tr>';
           }).join('') + '</tbody></table>';
         var sp = lr.spent_usd ?? 0;
         var bud = lr.daily_budget_usd ?? 3.6;
