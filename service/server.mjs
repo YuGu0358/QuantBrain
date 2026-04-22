@@ -17,6 +17,7 @@ import {
   flattenProviderEntries,
   formatProviderWinRate,
   summarizeDiagnoseProvider,
+  summarizeRetrievalStatus,
 } from "./llm_router_dashboard.mjs";
 import { describeRunLiveness } from "./run_liveness.mjs";
 import { finalizeRunExit } from "./run_runtime.mjs";
@@ -40,8 +41,8 @@ const ADMIN_TOKEN = process.env.ADMIN_TOKEN ?? "";
 const CREDENTIALS_SECRET = process.env.CREDENTIALS_SECRET ?? "";
 const DASHBOARD_USERS = parseDashboardUsers(process.env.DASHBOARD_USERS ?? "");
 const REGISTRATION_CODE = process.env.REGISTRATION_CODE ?? "";
-const OPENAI_IDEA_MODEL = process.env.OPENAI_IDEA_MODEL ?? "gpt-5.4-mini";
-const OPENAI_OPTIMIZE_MODEL = process.env.OPENAI_OPTIMIZE_MODEL ?? "gpt-5.4-mini";
+const OPENAI_IDEA_MODEL = process.env.OPENAI_IDEA_MODEL ?? "gpt-5.4-2026-03-05";
+const OPENAI_OPTIMIZE_MODEL = process.env.OPENAI_OPTIMIZE_MODEL ?? "gpt-5.4-2026-03-05";
 const OPENAI_PLANNER_MODEL = "gpt-5.4-2026-03-05";
 const OPTIMIZE_IDEA_SYSTEM_PROMPT =
   'You are a WorldQuant BRAIN alpha research specialist. Convert the user idea into a structured research direction. Return strict JSON: {"objective":string,"category":one of QUALITY/MOMENTUM/REVERSAL/LIQUIDITY/VOLATILITY/MICROSTRUCTURE/SENTIMENT,"hypothesis":string,"constraints":[string],"suggested_data_fields":[string]}';
@@ -966,6 +967,7 @@ async function buildRunsIndex(authContext = systemAuthContext()) {
           dashboard: formatProviderWinRate(provider),
         })),
         diagnoseStatus: summarizeDiagnoseProvider(flatProviders, recent),
+        retrievalStatus: summarizeRetrievalStatus(recent),
       }
     : null;
   schedulerState.qualityGuardrail = qualityGuardrail;
@@ -3809,6 +3811,10 @@ body{display:flex}
   if (un) un.textContent = userName;
 
   function esc(s) { return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+  function shortText(s, limit) {
+    var text = String(s ?? '');
+    return text.length > limit ? text.slice(0, limit) + '\u2026' : text;
+  }
   function $(id) { return document.getElementById(id); }
 
   // Nav tabs
@@ -4142,13 +4148,28 @@ body{display:flex}
         }).join('<div style="height:12px"></div>');
         if (llNote) {
           var diag = lr.diagnoseStatus || null;
+          var retrieval = lr.retrievalStatus || null;
+          var noteLines = [];
           if (diag && diag.lastFailureReason) {
-            llNote.textContent = diag.name + ' 最近一次回退：' + diag.lastFailureReason;
+            noteLines.push(esc(diag.name + ' 最近一次回退：' + shortText(diag.lastFailureReason, 120)));
           } else if (diag && diag.lowSample) {
-            llNote.textContent = diag.name + ' 目前样本不足（' + diag.calls + ' 次），暂不显示胜率。';
-          } else {
-            llNote.textContent = '';
+            noteLines.push(esc(diag.name + ' 目前样本不足（' + diag.calls + ' 次），暂不显示胜率。'));
           }
+          if (retrieval && retrieval.generation) {
+            var gen = retrieval.generation;
+            var genLine = '生成检索：' + gen.mode;
+            if (gen.embedderStatus) genLine += ' · embedder=' + gen.embedderStatus;
+            if (gen.error) genLine += ' · err=' + shortText(gen.error, 80);
+            noteLines.push(esc(genLine));
+          }
+          if (retrieval && retrieval.repair) {
+            var rep = retrieval.repair;
+            var repLine = '修复检索：' + rep.mode;
+            if (rep.semanticMemoryStatus) repLine += ' · memory=' + rep.semanticMemoryStatus;
+            if (rep.error) repLine += ' · err=' + shortText(rep.error, 80);
+            noteLines.push(esc(repLine));
+          }
+          llNote.innerHTML = noteLines.join('<br>');
         }
       } else if (llNote) {
         llNote.textContent = '';

@@ -35,43 +35,43 @@ providers:
   # --- DISTILL ---
   gpt_distill:
     role: distill
-    model_id: gpt-5.4-mini
+    model_id: gpt-5.4-2026-03-05
     api_base: null
     api_key_env: OPENAI_API_KEY
     client_type: openai_compat
-    cost_per_1k_input: 0.00075
-    cost_per_1k_output: 0.0045
+    cost_per_1k_input: 0.0025
+    cost_per_1k_output: 0.015
     weight_initial: 1.0
 
-  # --- DIAGNOSE (lightweight-first; fallback role=repair) ---
+  # --- DIAGNOSE ---
   gpt_diagnose:
     role: diagnose
-    model_id: gpt-5.4-mini
+    model_id: gpt-5.4-2026-03-05
     api_base: null
     api_key_env: OPENAI_API_KEY
     client_type: openai_compat
-    cost_per_1k_input: 0.00075
-    cost_per_1k_output: 0.0045
+    cost_per_1k_input: 0.0025
+    cost_per_1k_output: 0.015
     weight_initial: 1.0
 
-  # --- RETRIEVE SUMMARY (lightweight-first; fallback role=repair) ---
+  # --- RETRIEVE SUMMARY ---
   gpt_retrieve_summary:
     role: retrieve_summary
-    model_id: gpt-5.4-mini
+    model_id: gpt-5.4-2026-03-05
     api_base: null
     api_key_env: OPENAI_API_KEY
     client_type: openai_compat
-    cost_per_1k_input: 0.00075
-    cost_per_1k_output: 0.0045
+    cost_per_1k_input: 0.0025
+    cost_per_1k_output: 0.015
     weight_initial: 1.0
 
   # --- IDEA ---
   gpt_idea:
     role: idea
-    model_id: gpt-5.4-mini
+    model_id: gpt-5.4-2026-03-05
     api_base: null
     api_key_env: OPENAI_API_KEY
     client_type: openai_compat
-    cost_per_1k_input: 0.00075
-    cost_per_1k_output: 0.0045
+    cost_per_1k_input: 0.0025
+    cost_per_1k_output: 0.015
     weight_initial: 1.0

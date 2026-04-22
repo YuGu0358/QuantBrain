@@ -70,6 +70,16 @@ class Diagnoser:
                         raw, tokens_in, tokens_out, latency_ms = _invoke_provider(self, self.router, hq_provider, request_payload)
                         parsed = _extract_json(raw)
                         report = _report_from_mapping(parsed)
+                        report.raw.update(
+                            {
+                                "llm_fallback": True,
+                                "primary_error": str(exc),
+                                "primary_provider": provider.name,
+                                "fallback_provider": hq_provider.name,
+                                "fallback": False,
+                                "error": None,
+                            }
+                        )
                         _record_result(self.router, hq_provider, True, latency_ms, tokens_in, tokens_out)
                         return report
                     except Exception:
@@ -134,7 +144,10 @@ _SYSTEM_PROMPT = (
     "Available symptom types: low_sharpe (sharpe<1.0), low_fitness (fitness<0.5), high_turnover (turnover>0.7),\n"
     "low_turnover (turnover<0.01), high_corrlib (max_abs_correlation>0.7), high_complexity (complexity>15 operators),\n"
     "compile_fail (expression failed validation).\n"
-    "Return ONLY valid JSON matching the schema exactly."
+    "Return ONLY valid JSON matching this schema exactly: "
+    '{"primary_symptom":"one of the listed symptom types","secondary_symptoms":["symptom_type"],'
+    '"root_causes":["short cause"],"repair_priorities":[{"rank":1,"target_metric":"metric","suggested_action_type":"action"}],'
+    '"do_not_change":["constraint"]}. Use snake_case symptom labels exactly as listed.'
 )
 
 _VALID_SYMPTOMS = {
@@ -199,16 +212,17 @@ def _expression_complexity(expression: str) -> int:
 
 
 def _report_from_mapping(value: dict[str, Any]) -> DiagnosisReport:
-    primary = str(value.get("primary_symptom", ""))
+    normalized = _normalize_diagnosis_mapping(value)
+    primary = str(normalized.get("primary_symptom", ""))
     if primary not in _VALID_SYMPTOMS:
         raise ValueError(f"Invalid primary_symptom: {primary!r}")
     return DiagnosisReport(
         primary_symptom=primary,
-        secondary_symptoms=_string_list(value.get("secondary_symptoms", [])),
-        root_causes=_string_list(value.get("root_causes", [])),
-        repair_priorities=[dict(item) for item in value.get("repair_priorities", []) if isinstance(item, dict)],
-        do_not_change=_string_list(value.get("do_not_change", [])),
-        raw=value,
+        secondary_symptoms=_string_list(normalized.get("secondary_symptoms", [])),
+        root_causes=_string_list(normalized.get("root_causes", [])),
+        repair_priorities=[dict(item) for item in normalized.get("repair_priorities", []) if isinstance(item, dict)],
+        do_not_change=_string_list(normalized.get("do_not_change", [])),
+        raw=normalized,
     )
 
 
@@ -371,13 +385,91 @@ def _extract_json(raw: str) -> dict[str, Any]:
         brace = text.find("{")
         if brace != -1:
             text = text[brace:]
-    return json.loads(text)
+    decoder = json.JSONDecoder()
+    parsed, _end = decoder.raw_decode(text)
+    if not isinstance(parsed, dict):
+        raise ValueError("Diagnosis payload is not a JSON object")
+    return parsed
 
 
 def _string_list(value: Any) -> list[str]:
+    if isinstance(value, str):
+        cleaned = value.strip()
+        return [cleaned] if cleaned else []
     if not isinstance(value, list):
         return []
     return [str(item) for item in value]
+
+
+def _normalize_diagnosis_mapping(value: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError("Diagnosis payload must be a mapping")
+    normalized = dict(value)
+    normalized["primary_symptom"] = _normalize_symptom(value.get("primary_symptom"))
+    normalized["secondary_symptoms"] = _normalize_symptom_list(value.get("secondary_symptoms"))
+    normalized["root_causes"] = _string_list(value.get("root_causes", []))
+    normalized["do_not_change"] = _string_list(value.get("do_not_change", []))
+    repair_priorities = value.get("repair_priorities", [])
+    normalized["repair_priorities"] = repair_priorities if isinstance(repair_priorities, list) else []
+    return normalized
+
+
+def _normalize_symptom_list(value: Any) -> list[str]:
+    if isinstance(value, str):
+        items = [value]
+    elif isinstance(value, list):
+        items = value
+    else:
+        return []
+    normalized: list[str] = []
+    for item in items:
+        symptom = _normalize_symptom(item)
+        if symptom:
+            normalized.append(symptom)
+    return list(dict.fromkeys(normalized))
+
+
+def _normalize_symptom(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if not text:
+        return ""
+    normalized = re.sub(r"[^a-z0-9]+", "_", text).strip("_")
+    if normalized in _VALID_SYMPTOMS:
+        return normalized
+    aliases = {
+        "sharpe_low": "low_sharpe",
+        "low_sharpe_signal": "low_sharpe",
+        "fitness_low": "low_fitness",
+        "turnover_high": "high_turnover",
+        "turnover_low": "low_turnover",
+        "high_correlation": "high_corrlib",
+        "high_corr": "high_corrlib",
+        "high_corr_lib": "high_corrlib",
+        "high_correlation_library": "high_corrlib",
+        "complexity_high": "high_complexity",
+        "validation_fail": "compile_fail",
+        "validation_failed": "compile_fail",
+        "syntax_error": "compile_fail",
+        "compile_error": "compile_fail",
+    }
+    if normalized in aliases:
+        return aliases[normalized]
+    tokens = set(part for part in normalized.split("_") if part)
+    if "turnover" in tokens and "high" in tokens:
+        return "high_turnover"
+    if "turnover" in tokens and "low" in tokens:
+        return "low_turnover"
+    if "fitness" in tokens and "low" in tokens:
+        return "low_fitness"
+    if "sharpe" in tokens and "low" in tokens:
+        return "low_sharpe"
+    if ({"corr", "correlation", "corrlib"} & tokens) and "high" in tokens:
+        return "high_corrlib"
+    if "complexity" in tokens and "high" in tokens:
+        return "high_complexity"
+    if ({"compile", "validation", "syntax"} & tokens) and ({"fail", "failed", "error", "invalid"} & tokens):
+        return "compile_fail"
+    return normalized
 
 
 def _float_or_none(value: Any) -> float | None:

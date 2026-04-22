@@ -155,6 +155,36 @@ def test_retrieve_memory_returns_records(tmp_memory):
     assert "ts_mean" in result
 
 
+def test_retrieve_memory_compacts_to_top_success_and_failure(tmp_memory):
+    for index in range(4):
+        tmp_memory.add_record({
+            "expression": f"group_rank(ts_mean(volume, {21 + index}), industry)",
+            "symptom_tags": ["low_sharpe"],
+            "accept_decision": "accepted",
+            "recommended_directions": [f"accepted direction {index}"],
+            "forbidden_directions": [],
+            "family_tag": "",
+        })
+    for index in range(4):
+        tmp_memory.add_record({
+            "expression": f"group_rank(ts_delta(returns, {5 + index}), industry)",
+            "symptom_tags": ["low_sharpe"],
+            "accept_decision": "rejected",
+            "recommended_directions": [],
+            "forbidden_directions": [f"failed direction {index}"],
+            "family_tag": "",
+        })
+
+    tools = build_tools(tmp_memory, None, None)
+    retrieve = next(t for t in tools if t.name == "retrieve_repair_memory")
+    result = retrieve.invoke({"expression": "group_rank(returns, industry)", "symptoms": "low_sharpe"})
+
+    lines = [line for line in result.splitlines() if line.strip()]
+    assert len(lines) <= 3
+    assert sum("[SUCCESS]" in line for line in lines) <= 2
+    assert sum("[FAILED]" in line for line in lines) <= 1
+
+
 def test_repair_memory_persists_structured_logic_fields(tmp_path):
     memory = RepairMemory(tmp_path / "repair_memory.db")
     record = {
@@ -289,6 +319,29 @@ def test_repair_memory_persists_embeddings_for_semantic_retrieval(tmp_path):
     )
 
     assert result["positive"][0]["expression"] == "group_rank(ts_mean(volume, 63), industry)"
+    assert reloaded.last_retrieval_mode == "semantic"
+    assert reloaded.last_retrieval_error is None
+
+
+def test_repair_memory_retrieve_records_no_embedder_mode(tmp_path):
+    memory = RepairMemory(tmp_path / "repair_memory.db")
+    memory.add_record({
+        "expression": "group_rank(ts_mean(returns, 21), industry)",
+        "symptom_tags": ["low_sharpe"],
+        "accept_decision": "accepted",
+        "recommended_directions": ["add industry neutralization"],
+        "forbidden_directions": [],
+    })
+
+    result = memory.retrieve(
+        ["low_sharpe"],
+        "group_rank(returns, industry)",
+        topk=1,
+    )
+
+    assert result["positive"]
+    assert memory.last_retrieval_mode == "scored_no_embedder"
+    assert memory.last_retrieval_error is None
 
 
 # ---------------------------------------------------------------------------
@@ -346,6 +399,39 @@ def test_generate_repair_variants_returns_hint(tmp_memory):
     assert "rank(returns)" in result
     assert "low_sharpe" in result
     assert "1" in result  # always generates exactly 1 candidate
+
+
+def test_generate_repair_variants_uses_compact_profiles_and_context(tmp_memory):
+    tools = build_tools(tmp_memory, None, None)
+    generate = next(t for t in tools if t.name == "generate_repair_variants")
+    diagnosis = json.dumps({"primary_symptom": "low_sharpe", "repair_strategy": "add neutralization", "do_not_change": []})
+    logic = json.dumps({
+        "math_profile": {
+            "operators": ["group_rank", "ts_rank", "ts_mean", "ts_delta", "ts_std_dev"],
+            "fields": ["est_eps", "returns"],
+            "windows": [5, 21, 42, 63, 126],
+            "group_fields": ["subindustry"],
+            "dominant_structure": "hybrid_group_time_series",
+            "complexity": 7,
+        },
+        "economic_profile": {
+            "theme": "revision_reversal",
+            "thesis": "Blend analyst revision drift with medium-horizon reversal after volatility shocks.",
+        },
+    })
+    result = generate.invoke({
+        "expression": "group_rank(rank(returns), subindustry)",
+        "diagnosis_json": diagnosis,
+        "memory_context": "\n".join(f"{i}. [SUCCESS] very long memory item {i} | avoid repeating this line" for i in range(1, 8)),
+        "logic_json": logic,
+        "logic_patterns": "\n".join(f"{i}. [SUCCESS] very long pattern item {i} | actions=smoothing,field_shift,quality_anchor" for i in range(1, 8)),
+    })
+
+    assert "Math focus:" in result
+    assert "Economic thesis:" in result
+    assert "Math profile:" not in result
+    assert "Economic profile:" not in result
+    assert len(result) < 2200
 
 
 def test_analyze_factor_logic_tool_returns_profiles(tmp_memory):
@@ -410,6 +496,46 @@ def test_retrieve_logic_patterns_surfaces_platform_outcomes(tmp_memory):
     })
 
     assert "platform=no_daily_pnl" in result
+
+
+def test_retrieve_logic_patterns_compacts_to_top_success_and_failure(tmp_memory):
+    for index in range(4):
+        tmp_memory.add_record({
+            "expression": f"group_rank(ts_mean(volume, {21 + index}), industry)",
+            "symptom_tags": ["high_turnover"],
+            "accept_decision": "accepted",
+            "recommended_directions": [f"liquidity smoothing {index}"],
+            "math_profile": analyze_math_profile(f"group_rank(ts_mean(volume, {21 + index}), industry)"),
+            "economic_profile": infer_economic_profile("group_rank(ts_mean(volume, 21), industry)", category="LIQUIDITY"),
+            "repair_delta": {"smoothing": True, "horizon_change": True},
+            "outcome_score": 1.5 - index * 0.1,
+        })
+    for index in range(4):
+        tmp_memory.add_record({
+            "expression": f"group_rank(ts_delta(returns, {5 + index}), industry)",
+            "symptom_tags": ["high_turnover"],
+            "accept_decision": "rejected",
+            "forbidden_directions": [f"avoid micro tuning {index}"],
+            "math_profile": analyze_math_profile(f"group_rank(ts_delta(returns, {5 + index}), industry)"),
+            "economic_profile": infer_economic_profile("group_rank(ts_delta(returns, 5), industry)", category="REVERSAL"),
+            "repair_delta": {"smoothing": False, "field_shift": False},
+            "outcome_score": -0.8 - index * 0.1,
+            "platform_outcome": {"status": "no_daily_pnl"},
+        })
+
+    tools = build_tools(tmp_memory, None, None)
+    retrieve = next(t for t in tools if t.name == "retrieve_logic_patterns")
+    result = retrieve.invoke({
+        "expression": "group_rank(ts_mean(volume, 21), industry)",
+        "symptoms": "high_turnover",
+        "category": "LIQUIDITY",
+        "k": 5,
+    })
+
+    lines = [line for line in result.splitlines() if line.strip()]
+    assert len(lines) <= 3
+    assert sum("[SUCCESS]" in line for line in lines) <= 2
+    assert sum("[FAILED]" in line for line in lines) <= 1
 
 
 # ---------------------------------------------------------------------------

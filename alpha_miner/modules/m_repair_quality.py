@@ -11,6 +11,7 @@ class RepairRouteDecision:
     route: str
     reasons: list[str]
     use_rule_seeds: bool
+    require_semantic_memory: bool = False
 
 
 @dataclass(frozen=True)
@@ -28,6 +29,7 @@ def decide_repair_route(
     *,
     diagnosis: Any = None,
     has_chain: bool,
+    semantic_memory_enabled: bool = True,
     rule_candidate_count: int,
 ) -> RepairRouteDecision:
     failed_checks = {
@@ -49,20 +51,45 @@ def decide_repair_route(
     )
 
     if not has_chain:
+        if complex_failure:
+            return RepairRouteDecision(
+                route="blocked",
+                reasons=["langchain_unavailable", "semantic_memory_required"],
+                use_rule_seeds=False,
+                require_semantic_memory=True,
+            )
         if rule_candidate_count > 0:
             return RepairRouteDecision(route="rule_only", reasons=["langchain_unavailable"], use_rule_seeds=False)
         return RepairRouteDecision(route="legacy", reasons=["langchain_unavailable", "no_rule_candidates"], use_rule_seeds=False)
+
+    if complex_failure and not semantic_memory_enabled:
+        return RepairRouteDecision(
+            route="blocked",
+            reasons=["semantic_memory_required", "semantic_memory_unavailable"],
+            use_rule_seeds=False,
+            require_semantic_memory=True,
+        )
 
     if rule_candidate_count > 0:
         reasons = ["rule_candidates_available"]
         if complex_failure:
             reasons.append("complex_failure_requires_llm_reasoning")
-        return RepairRouteDecision(route="hybrid", reasons=reasons, use_rule_seeds=True)
+        return RepairRouteDecision(
+            route="hybrid",
+            reasons=reasons,
+            use_rule_seeds=True,
+            require_semantic_memory=complex_failure,
+        )
 
     reasons = ["langchain_required"]
     if complex_failure:
         reasons.append("complex_failure_requires_llm_reasoning")
-    return RepairRouteDecision(route="langchain", reasons=reasons, use_rule_seeds=False)
+    return RepairRouteDecision(
+        route="langchain",
+        reasons=reasons,
+        use_rule_seeds=False,
+        require_semantic_memory=complex_failure,
+    )
 
 
 def assess_repair_candidate_quality(

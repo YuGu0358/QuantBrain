@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from alpha_miner.modules.llm_router import LLMRouter
+from alpha_miner.modules.idea_optimizer import IdeaOptimizer
 from alpha_miner.modules.m9_knowledge_distiller import KnowledgeDistiller
 from alpha_miner.modules.m_diagnoser import Diagnoser
 from alpha_miner.modules.m_distiller import Distiller
@@ -59,6 +60,10 @@ def _diagnosis_summary(diagnosis: Any) -> dict[str, Any] | None:
         "secondary_symptoms": diagnosis.secondary_symptoms,
         "fallback": bool(raw.get("fallback")),
         "error": raw.get("error"),
+        "llm_fallback": bool(raw.get("llm_fallback")),
+        "primary_error": raw.get("primary_error"),
+        "primary_provider": raw.get("primary_provider"),
+        "fallback_provider": raw.get("fallback_provider"),
     }
 
 
@@ -68,6 +73,38 @@ def _quality_stage_summary(agent: Any) -> dict[str, Any]:
     return {
         "generation": generation,
         "repair": repair,
+    }
+
+
+def _apply_idea_optimization(
+    objective: str,
+    router: LLMRouter | None,
+    kb: KnowledgeBase | None,
+    explicit_category: str | None = None,
+) -> dict[str, Any]:
+    if router is None:
+        return {"objective": objective, "category": explicit_category, "idea_plan": None}
+
+    plan = IdeaOptimizer(router=router, kb=kb).optimize(objective)
+    category = explicit_category or str(plan.get("category") or "").strip() or explicit_category
+
+    effective_parts = [str(plan.get("objective") or objective).strip() or objective]
+    hypothesis = str(plan.get("hypothesis") or "").strip()
+    if hypothesis and hypothesis not in effective_parts:
+        effective_parts.append(f"Hypothesis: {hypothesis}")
+
+    constraints = [str(item).strip() for item in (plan.get("constraints") or []) if str(item).strip()]
+    if constraints:
+        effective_parts.append(f"Constraints: {', '.join(constraints[:4])}")
+
+    suggested_data_fields = [str(item).strip() for item in (plan.get("suggested_data_fields") or []) if str(item).strip()]
+    if suggested_data_fields:
+        effective_parts.append(f"Preferred data fields: {', '.join(suggested_data_fields[:5])}")
+
+    return {
+        "objective": " ".join(part for part in effective_parts if part).strip() or objective,
+        "category": category,
+        "idea_plan": plan,
     }
 
 
@@ -89,14 +126,38 @@ def main() -> None:
     # across runs. Per-run output_dir is only for ephemeral artefacts (snapshots, logs).
     shared_dir = output_dir.parent
     kb_embedder = None
+    kb_embedder_status = "disabled_no_openai_key"
+    kb_embedder_error: str | None = None
     _openai_key = os.environ.get("OPENAI_API_KEY", "")
     if _openai_key:
         try:
             from langchain_openai import OpenAIEmbeddings
             kb_embedder = OpenAIEmbeddings(api_key=_openai_key, model="text-embedding-3-small")
+            kb_embedder_status = "ready"
             print("[kb] embedder initialized (text-embedding-3-small)", flush=True)
         except Exception as _emb_exc:
+            kb_embedder_status = "init_failed"
+            kb_embedder_error = str(_emb_exc)
             print(f"[kb] embedder unavailable, falling back to SQL search: {_emb_exc}", flush=True)
+            append_jsonl(
+                progress_path,
+                {
+                    "at": _ts(),
+                    "stage": "kb_embedder_unavailable",
+                    "status": kb_embedder_status,
+                    "error": kb_embedder_error,
+                },
+            )
+    else:
+        append_jsonl(
+            progress_path,
+            {
+                "at": _ts(),
+                "stage": "kb_embedder_unavailable",
+                "status": kb_embedder_status,
+                "error": None,
+            },
+        )
     kb = KnowledgeBase(shared_dir / "knowledge_base.db", embedder=kb_embedder)
     kb.import_wq101_negative_examples(PACKAGE_ROOT / "seeds" / "wq101_alphas.json")
     _import_submitted_feedback(kb, shared_dir / "submitted_alphas.jsonl")
@@ -140,6 +201,7 @@ def main() -> None:
     # If repair context is provided, pass it as structured data to the generation agent
     effective_objective = args.objective
     repair_ctx: dict | None = None
+    idea_plan: dict[str, Any] | None = None
     if args.repair_context:
         try:
             repair_ctx = read_json(Path(args.repair_context))
@@ -153,6 +215,32 @@ def main() -> None:
                     effective_objective = f"Repair alpha with failed checks {failed}: {parent_expr[:80]}"
         except Exception:
             repair_ctx = None
+
+    if repair_ctx is None:
+        optimized = _apply_idea_optimization(
+            objective=effective_objective,
+            router=router,
+            kb=kb,
+            explicit_category=args.category,
+        )
+        effective_objective = optimized["objective"]
+        if optimized.get("category"):
+            category = optimized["category"]
+        idea_plan = optimized.get("idea_plan")
+        if idea_plan:
+            append_jsonl(
+                progress_path,
+                {
+                    "at": _ts(),
+                    "stage": "idea_optimized",
+                    "input_objective": args.objective,
+                    "effective_objective": effective_objective,
+                    "category": category,
+                    "hypothesis": idea_plan.get("hypothesis"),
+                    "constraints": idea_plan.get("constraints") or [],
+                    "suggested_data_fields": idea_plan.get("suggested_data_fields") or [],
+                },
+            )
 
     repair_memory: RepairMemory | None = None
     if repair_ctx is not None:
@@ -576,6 +664,12 @@ def main() -> None:
 
     _llm_stage_metrics = _router_stage_metrics(router)
     _quality_metrics = _quality_stage_summary(agent)
+    _kb_retrieval_mode = getattr(agent, "last_generation_retrieval_mode", None)
+    if _kb_retrieval_mode in (None, "", "unused", "uninitialized"):
+        _kb_retrieval_mode = getattr(kb, "last_rag_mode", "unused")
+    _kb_retrieval_error = getattr(agent, "last_generation_retrieval_error", None)
+    if _kb_retrieval_error in (None, ""):
+        _kb_retrieval_error = getattr(kb, "last_rag_error", None)
     summary = {
         "engine": "python-v2",
         "mode": args.mode,
@@ -597,6 +691,13 @@ def main() -> None:
         "llm_stage_cost_usd": _llm_stage_metrics["cost_usd"],
         "llm_stage_latency_ms": _llm_stage_metrics["latency_ms"],
         "quality_stage_metrics": _quality_metrics,
+        "kb_embedder_status": kb_embedder_status,
+        "kb_embedder_error": kb_embedder_error,
+        "kb_retrieval_mode": _kb_retrieval_mode,
+        "kb_retrieval_error": _kb_retrieval_error,
+        "repair_retrieval_mode": getattr(agent, "last_repair_retrieval_mode", "not_applicable") if repair_ctx is not None else "not_applicable",
+        "repair_retrieval_error": getattr(agent, "last_repair_retrieval_error", None) if repair_ctx is not None else None,
+        "repair_semantic_memory_status": getattr(getattr(agent, "repair_chain", None), "last_embedding_status", "not_applicable") if repair_ctx is not None else "not_applicable",
         "total_brain_simulations": len(evaluated_records) + companion_sign_flip_count,
         "total_runtime_seconds": round(time.time() - started, 4),
         "rejected_by_stage": rejected_by_stage,

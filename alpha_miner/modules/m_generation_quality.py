@@ -47,9 +47,17 @@ def assess_generation_candidate_quality(
     reasons: list[str] = []
     warnings: list[str] = []
     score = 0.0
+    structured_single_family = _is_structured_native_single_family(
+        math_profile,
+        families=families,
+        category=category,
+    )
 
     if len(families) >= 2:
         score += 1.2
+    elif structured_single_family:
+        warnings.append("category_native_single_family")
+        score += 0.45
     else:
         reasons.append("single_family_exposure")
         score -= 1.0
@@ -58,6 +66,8 @@ def assess_generation_candidate_quality(
         score += 0.4
     elif len(fields) >= 2:
         score += 0.2
+    elif structured_single_family:
+        score += 0.15
     else:
         warnings.append("thin_field_set")
         score -= 0.4
@@ -154,6 +164,47 @@ def _is_generic_single_field_expression(math_profile: dict[str, Any]) -> bool:
     operators = set(math_profile.get("operators") or [])
     complexity = int(math_profile.get("complexity") or 0)
     return len(fields) <= 1 and len(operators) <= 1 and complexity <= 2
+
+
+def _is_structured_native_single_family(
+    math_profile: dict[str, Any],
+    *,
+    families: list[str],
+    category: str,
+) -> bool:
+    if len(families) != 1:
+        return False
+
+    family = families[0]
+    normalized_category = str(category or "").strip().lower()
+    allowed_families = {
+        "quality": {"quality"},
+        "fundamental": {"quality"},
+        "liquidity": {"liquidity"},
+        "sentiment": {"sentiment"},
+        "momentum": {"price"},
+        "reversal": {"price"},
+        "volatility": {"price", "risk"},
+        "microstructure": {"price", "liquidity"},
+        "risk": {"risk", "price"},
+    }
+    if family not in allowed_families.get(normalized_category, set()):
+        return False
+
+    dominant_structure = str(math_profile.get("dominant_structure") or "")
+    if dominant_structure not in {"hybrid_group_time_series", "cross_sectional_group", "time_series"}:
+        return False
+
+    windows = list(math_profile.get("windows") or [])
+    complexity = int(math_profile.get("complexity") or 0)
+    has_group = bool(math_profile.get("has_group_neutralization"))
+    has_multi_window = len(set(windows)) >= 2 and max(windows) >= 20
+
+    if complexity < 3:
+        return False
+    if not (has_group or has_multi_window):
+        return False
+    return not _is_generic_single_field_expression(math_profile)
 
 
 def _category_matches_quality_theme(category: str, theme: Any, families: list[str]) -> bool:

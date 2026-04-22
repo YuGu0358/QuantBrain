@@ -36,6 +36,8 @@ class KnowledgeBase:
     def __init__(self, db_path: Path, embedder: Any = None):
         self.db_path = db_path
         self.embedder = embedder
+        self.last_rag_mode = "uninitialized"
+        self.last_rag_error: str | None = None
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
@@ -214,13 +216,28 @@ class KnowledgeBase:
     # ------------------------------------------------------------------
 
     def rag_context(self, category: str, limit: int = 4, query: str | None = None) -> RagContext:
-        if self.embedder is not None and query:
-            try:
-                return self._semantic_rag_context(category, limit, query)
-            except Exception as exc:
-                print(f"[kb] semantic search failed ({exc}), falling back to SQL", flush=True)
+        self.last_rag_error = None
+        if not query:
+            self.last_rag_mode = "sql_no_query"
+            return self._sql_rag_context(category, limit)
+        if self.embedder is None:
+            self.last_rag_mode = "sql_no_embedder"
+            return self._sql_rag_context(category, limit)
+        try:
+            context = self._semantic_rag_context(category, limit, query)
+            self.last_rag_mode = "semantic"
+            return context
+        except _KnowledgeBaseFallback as exc:
+            self.last_rag_mode = exc.mode
+            self.last_rag_error = exc.error
+            return self._sql_rag_context(category, limit)
+        except Exception as exc:
+            self.last_rag_mode = "sql_semantic_error"
+            self.last_rag_error = str(exc)
+            print(f"[kb] semantic search failed ({exc}), falling back to SQL", flush=True)
+            return self._sql_rag_context(category, limit)
 
-        # ── SQL fallback ──────────────────────────────────────────────
+    def _sql_rag_context(self, category: str, limit: int) -> RagContext:
         with sqlite3.connect(self.db_path) as db:
             positive = [
                 _row_to_dict(row)
@@ -270,7 +287,7 @@ class KnowledgeBase:
             ).fetchall()
 
         if not rows:
-            return self.rag_context(category, limit, query=None)
+            raise _KnowledgeBaseFallback("sql_no_embeddings")
 
         ids = [r[0] for r in rows]
         is_neg = [bool(r[4]) for r in rows]
@@ -396,3 +413,10 @@ def _row_to_dict(row: tuple[Any, ...]) -> dict[str, Any]:
         "is_negative_example": bool(row[4]),
         "metadata": json.loads(row[5] or "{}"),
     }
+
+
+class _KnowledgeBaseFallback(RuntimeError):
+    def __init__(self, mode: str, error: str | None = None):
+        super().__init__(error or mode)
+        self.mode = mode
+        self.error = error

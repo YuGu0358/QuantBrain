@@ -43,6 +43,44 @@ class FakeRouter:
         path.write_text(json.dumps({"providers": {}, "spent_usd": self.spent_usd}), encoding="utf-8")
 
 
+class MultiRoleFakeRouter:
+    def __init__(self, raw_responses: dict[str, dict | str], model_id: str = "gpt-5.4-2026-03-05"):
+        self.raw_responses = dict(raw_responses)
+        self.providers = {}
+        for role in raw_responses:
+            provider = LLMProvider(
+                name=f"fake_{role}",
+                role=role,
+                model_id=model_id,
+                client_type="openai_compat",
+            )
+            self.providers[role] = provider
+        self._providers = {(provider.name, provider.role): provider for provider in self.providers.values()}
+        self.spent_usd = 0.0
+        self.picked_roles = []
+        self.payloads = []
+
+    def pick(self, role: str):
+        self.picked_roles.append(role)
+        provider = self.providers.get(role)
+        if provider is None:
+            raise ValueError(f"No provider for {role}")
+        return provider
+
+    def _call_provider(self, provider, request_payload):
+        self.payloads.append((provider.role, request_payload))
+        raw_response = self.raw_responses[provider.role]
+        if isinstance(raw_response, str):
+            return raw_response, 10, 20, 30.0
+        return json.dumps(raw_response), 10, 20, 30.0
+
+    def record_result(self, *args, **kwargs):
+        pass
+
+    def save_state(self, path):
+        path.write_text(json.dumps({"providers": {}, "spent_usd": self.spent_usd}), encoding="utf-8")
+
+
 def test_diagnoser_falls_back_without_router_and_counts_complexity():
     report = Diagnoser(router=None).diagnose(
         expression="group_rank(ts_mean(rank(close), 20) + ts_delta(volume, 5), industry)",
@@ -100,6 +138,76 @@ def test_diagnoser_uses_repair_provider_and_parses_json_response():
     assert payload["messages"][1]["role"] == "user"
     prompt_input = json.loads(payload["messages"][1]["content"])
     assert prompt_input["metrics"]["complexity"] == 2
+
+
+def test_diagnoser_normalizes_primary_symptom_aliases_from_diagnose_role():
+    router = FakeRouter(
+        raw_response={
+            "primary_symptom": "High Turnover",
+            "secondary_symptoms": "low fitness",
+            "root_causes": ["fast ts_delta window"],
+            "repair_priorities": [{"rank": 1, "target_metric": "turnover"}],
+            "do_not_change": ["volume"],
+        },
+        role="diagnose",
+    )
+
+    report = Diagnoser(router).diagnose(
+        expression="rank(ts_delta(volume, 5))",
+        metrics={
+            "sharpe": 1.2,
+            "fitness": 0.4,
+            "turnover": 0.9,
+            "max_abs_correlation": 0.2,
+        },
+        failed_checks=["HIGH_TURNOVER"],
+        gate_reasons=["turnover too high"],
+    )
+
+    assert report.primary_symptom == "high_turnover"
+    assert report.secondary_symptoms == ["low_fitness"]
+    assert router.picked_roles == ["diagnose"]
+    assert report.raw.get("fallback") is not True
+
+
+def test_diagnoser_preserves_llm_fallback_metadata_when_repair_rescues_primary_failure():
+    router = MultiRoleFakeRouter(
+        raw_responses={
+            "diagnose": {
+                "primary_symptom": "bad symptom",
+                "secondary_symptoms": [],
+                "root_causes": ["unstructured output"],
+                "repair_priorities": [],
+                "do_not_change": [],
+            },
+            "repair": {
+                "primary_symptom": "low_sharpe",
+                "secondary_symptoms": ["high_turnover"],
+                "root_causes": ["weak residual signal"],
+                "repair_priorities": [{"rank": 1, "target_metric": "sharpe"}],
+                "do_not_change": ["industry"],
+            },
+        }
+    )
+
+    report = Diagnoser(router).diagnose(
+        expression="group_rank(ts_mean(rank(close), 20), industry)",
+        metrics={
+            "sharpe": 0.8,
+            "fitness": 0.6,
+            "turnover": 0.3,
+            "max_abs_correlation": 0.2,
+        },
+        failed_checks=[],
+        gate_reasons=[],
+    )
+
+    assert report.primary_symptom == "low_sharpe"
+    assert router.picked_roles == ["diagnose", "repair"]
+    assert report.raw["llm_fallback"] is True
+    assert report.raw["primary_provider"] == "fake_diagnose"
+    assert report.raw["fallback_provider"] == "fake_repair"
+    assert "Invalid primary_symptom" in report.raw["primary_error"]
 
 
 def test_repair_memory_persists_records_and_filters_by_symptom_overlap(tmp_path: Path):

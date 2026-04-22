@@ -179,6 +179,8 @@ def test_rag_context_uses_semantic_path_when_query_provided(tmp_path):
     assert len(ctx.negative) <= 2
     # semantic path was used → embed_query called (at least once for upserts + once for query)
     assert emb.embed_query.call_count > 0
+    assert kb.last_rag_mode == "semantic"
+    assert kb.last_rag_error is None
 
 
 def test_rag_context_falls_back_to_sql_without_query(tmp_path):
@@ -199,6 +201,8 @@ def test_rag_context_falls_back_to_sql_without_embedder(tmp_path):
     ctx = kb.rag_context("MOMENTUM", limit=2, query="some query")
     assert isinstance(ctx, RagContext)
     assert len(ctx.positive) + len(ctx.negative) <= 4
+    assert kb.last_rag_mode == "sql_no_embedder"
+    assert kb.last_rag_error is None
 
 
 def test_semantic_rag_context_respects_limit(tmp_path):

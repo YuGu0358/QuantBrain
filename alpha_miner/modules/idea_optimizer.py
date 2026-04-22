@@ -105,6 +105,17 @@ class IdeaOptimizer:
             )
             return result
         except Exception:
+            try:
+                self.router.record_result(
+                    provider.name,
+                    "idea",
+                    False,
+                    (time.time() - t0) * 1000,
+                    0,
+                    0,
+                )
+            except Exception:
+                pass
             return {
                 "objective": raw_idea,
                 "category": "QUALITY",

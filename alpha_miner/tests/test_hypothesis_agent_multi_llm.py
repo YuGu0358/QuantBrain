@@ -387,6 +387,43 @@ def test_generate_batch_repair_chain_receives_rule_seed_candidates(tmp_path):
     assert kwargs["seed_candidates"] == [asdict(seed_candidates[0])]
 
 
+def test_generate_batch_blocks_complex_repair_without_semantic_memory(tmp_path):
+    kb, cache = _kb_and_cache(tmp_path)
+    agent = HypothesisAgent(
+        kb=kb,
+        cache=cache,
+        taxonomy={"MOMENTUM": {}},
+    )
+
+    with patch.object(
+        HypothesisAgent,
+        "_rule_based_repair_candidates",
+        return_value=[
+            Candidate(
+                id="repair_rule_000",
+                category="MOMENTUM",
+                hypothesis="cross family escape",
+                expression="rank(ts_delta(volume, 20)) * rank(-returns)",
+                origin_refs=["rule_repair", "rule_cross_family_escape"],
+            )
+        ],
+    ):
+        result = agent.generate_batch(
+            "repair objective",
+            category="MOMENTUM",
+            n=1,
+            repair_context={
+                "expression": "magic_alpha(close)",
+                "failedChecks": ["SELF_CORRELATION"],
+                "gate": {"reasons": ["daily pnl degraded"]},
+            },
+        )
+
+    assert result == []
+    assert agent.last_repair_quality["route"] == "blocked"
+    assert "semantic_memory_required" in agent.last_repair_quality["reasons"]
+
+
 def test_generation_payload_includes_cross_category_examples(tmp_path):
     kb, cache = _kb_and_cache(tmp_path)
     agent = HypothesisAgent(kb=kb, cache=cache, taxonomy={"QUALITY": {}, "MOMENTUM": {}, "REVERSAL": {}})

@@ -3,6 +3,29 @@ function asNumber(value, fallback = 0) {
   return Number.isFinite(numeric) ? numeric : fallback;
 }
 
+function asNonEmptyString(value) {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+}
+
+function pickRecentRetrievalMode(recentRuns, config) {
+  const ignoredModes = new Set(config.ignoredModes || []);
+  for (const run of recentRuns || []) {
+    const summary = run?.summary;
+    if (!summary || typeof summary !== "object") continue;
+    const mode = asNonEmptyString(summary[config.modeKey]);
+    if (!mode || ignoredModes.has(mode)) continue;
+    return {
+      runId: run?.runId || null,
+      mode,
+      error: summary[config.errorKey] ?? null,
+      [config.statusField]: asNonEmptyString(summary[config.statusKey]),
+    };
+  }
+  return null;
+}
+
 export function flattenProviderEntries(providers) {
   if (!providers || typeof providers !== "object") return [];
   const flat = [];
@@ -56,6 +79,11 @@ export function summarizeDiagnoseProvider(providers, recentRuns = [], options = 
       lastFailureRunId = run?.runId || null;
       break;
     }
+    if (diagnosis?.llm_fallback && diagnosis?.primary_error) {
+      lastFailureReason = String(diagnosis.primary_error);
+      lastFailureRunId = run?.runId || null;
+      break;
+    }
   }
   return {
     name: diagnose.name || "diagnose",
@@ -69,5 +97,24 @@ export function summarizeDiagnoseProvider(providers, recentRuns = [], options = 
     rateDetail: formatted.detail,
     lastFailureReason,
     lastFailureRunId,
+  };
+}
+
+export function summarizeRetrievalStatus(recentRuns = []) {
+  return {
+    generation: pickRecentRetrievalMode(recentRuns, {
+      modeKey: "kb_retrieval_mode",
+      errorKey: "kb_retrieval_error",
+      statusKey: "kb_embedder_status",
+      statusField: "embedderStatus",
+      ignoredModes: ["uninitialized"],
+    }),
+    repair: pickRecentRetrievalMode(recentRuns, {
+      modeKey: "repair_retrieval_mode",
+      errorKey: "repair_retrieval_error",
+      statusKey: "repair_semantic_memory_status",
+      statusField: "semanticMemoryStatus",
+      ignoredModes: ["not_applicable", "uninitialized", "unused"],
+    }),
   };
 }

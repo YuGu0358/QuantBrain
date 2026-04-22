@@ -318,7 +318,7 @@ def test_rule_repair_respects_account_blocked_operators(tmp_path: Path, monkeypa
     assert all("delay(" not in candidate.expression for candidate in candidates)
 
 
-def test_complex_repair_without_agent_keeps_rule_escape_candidates(tmp_path: Path):
+def test_complex_repair_without_agent_blocks_without_semantic_memory(tmp_path: Path):
     agent = _agent(tmp_path)
 
     candidates = agent.generate_batch(
@@ -331,5 +331,6 @@ def test_complex_repair_without_agent_keeps_rule_escape_candidates(tmp_path: Pat
         },
     )
 
-    assert candidates
-    assert candidates[0].origin_refs == ["rule_repair", "rule_cross_family_escape"]
+    assert candidates == []
+    assert agent.last_repair_quality["route"] == "blocked"
+    assert "semantic_memory_required" in agent.last_repair_quality["reasons"]

@@ -14,6 +14,8 @@ class RepairMemory:
     def __init__(self, db_path: Path, embedder: Any | None = None):
         self.db_path = Path(db_path)
         self.embedder = embedder
+        self.last_retrieval_mode = "uninitialized"
+        self.last_retrieval_error: str | None = None
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
@@ -86,7 +88,9 @@ class RepairMemory:
         economic_profile: dict | None = None,
     ) -> dict:
         records = self.get_recent(limit=10000)
-        semantic_scores = self._semantic_scores(records, expression, symptom_tags)
+        semantic_scores, retrieval_mode, retrieval_error = self._semantic_scores(records, expression, symptom_tags)
+        self.last_retrieval_mode = retrieval_mode
+        self.last_retrieval_error = retrieval_error
         scored_records = [
             {
                 **record,
@@ -215,21 +219,38 @@ class RepairMemory:
         conn.row_factory = sqlite3.Row
         return conn
 
-    def _semantic_scores(self, records: list[dict[str, Any]], expression: str, symptom_tags: list[str]) -> dict[str, float]:
-        if self.embedder is None or not records:
-            return {}
-        self._ensure_embeddings(records)
-        query_text = f"{expression} {' '.join(_string_list(symptom_tags))}".strip()
-        query_embedding = self._embed_text(query_text)
-        if not query_embedding:
-            return {}
-        scores: dict[str, float] = {}
-        for record in records:
-            vector = _float_list(record.get("embedding_json"))
-            if not vector:
-                continue
-            scores[str(record.get("record_id"))] = _cosine_similarity(query_embedding, vector)
-        return scores
+    def _semantic_scores(
+        self,
+        records: list[dict[str, Any]],
+        expression: str,
+        symptom_tags: list[str],
+    ) -> tuple[dict[str, float], str, str | None]:
+        if not records:
+            return {}, "empty", None
+        if self.embedder is None:
+            return {}, "scored_no_embedder", None
+        try:
+            self._ensure_embeddings(records)
+            available_vectors = [
+                _float_list(record.get("embedding_json"))
+                for record in records
+                if _float_list(record.get("embedding_json"))
+            ]
+            if not available_vectors:
+                return {}, "scored_no_embeddings", None
+            query_text = f"{expression} {' '.join(_string_list(symptom_tags))}".strip()
+            query_embedding = self._embed_text(query_text)
+            if not query_embedding:
+                return {}, "scored_embedder_error", "query_embedding_unavailable"
+            scores: dict[str, float] = {}
+            for record in records:
+                vector = _float_list(record.get("embedding_json"))
+                if not vector:
+                    continue
+                scores[str(record.get("record_id"))] = _cosine_similarity(query_embedding, vector)
+            return scores, "semantic", None
+        except Exception as exc:
+            return {}, "scored_embedder_error", str(exc)
 
     def _ensure_embeddings(self, records: list[dict[str, Any]]) -> None:
         if self.embedder is None:

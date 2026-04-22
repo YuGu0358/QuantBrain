@@ -81,6 +81,70 @@ The "candidates" array must contain EXACTLY ONE entry — your single most confi
 
 
 DEFAULT_REPAIR_CHAIN_MODEL = "gpt-5.4-2026-03-05"
+_REPAIR_MEMORY_SUCCESS_LIMIT = 2
+_REPAIR_MEMORY_FAILURE_LIMIT = 1
+_LOGIC_PATTERN_SUCCESS_LIMIT = 2
+_LOGIC_PATTERN_FAILURE_LIMIT = 1
+_PROMPT_CONTEXT_MAX_LINES = 3
+_PROMPT_CONTEXT_MAX_TOTAL_CHARS = 420
+_PROMPT_LINE_MAX_CHARS = 140
+
+
+def _clip_text(value: Any, limit: int = 80) -> str:
+    text = " ".join(str(value or "").split())
+    if len(text) <= limit:
+        return text
+    return text[: max(limit - 3, 0)].rstrip() + "..."
+
+
+def _compact_prompt_lines(text: str, max_lines: int = _PROMPT_CONTEXT_MAX_LINES) -> str:
+    if not text:
+        return "none"
+    lines = []
+    total_chars = 0
+    for raw_line in str(text).splitlines():
+        line = _clip_text(raw_line.strip(), _PROMPT_LINE_MAX_CHARS)
+        if not line:
+            continue
+        projected = total_chars + len(line)
+        if lines and projected > _PROMPT_CONTEXT_MAX_TOTAL_CHARS:
+            break
+        lines.append(line)
+        total_chars = projected
+        if len(lines) >= max_lines:
+            break
+    return "\n".join(lines) if lines else "none"
+
+
+def _summarize_math_profile(profile: dict[str, Any] | None) -> str:
+    profile = profile or {}
+    parts = []
+    if profile.get("operators"):
+        parts.append(f"ops={','.join(str(item) for item in profile['operators'][:4])}")
+    if profile.get("fields"):
+        parts.append(f"fields={','.join(str(item) for item in profile['fields'][:3])}")
+    if profile.get("windows"):
+        parts.append(f"windows={','.join(str(item) for item in profile['windows'][:5])}")
+    if profile.get("group_fields"):
+        parts.append(f"groups={','.join(str(item) for item in profile['group_fields'][:2])}")
+    if profile.get("dominant_structure"):
+        parts.append(f"struct={profile['dominant_structure']}")
+    complexity = profile.get("complexity")
+    if complexity not in (None, ""):
+        parts.append(f"complexity={complexity}")
+    return "; ".join(parts) if parts else "none"
+
+
+def _summarize_economic_profile(profile: dict[str, Any] | None) -> str:
+    profile = profile or {}
+    theme = _clip_text(profile.get("theme"), 32)
+    thesis = _clip_text(profile.get("thesis"), 110)
+    parts = []
+    if theme:
+        parts.append(f"theme={theme}")
+    if thesis:
+        parts.append(f"thesis={thesis}")
+    return "; ".join(parts) if parts else "none"
 
 
 # ---------------------------------------------------------------------------
@@ -192,20 +256,22 @@ def build_tools(memory: RepairMemory, embeddings: Any, validator: Any) -> list:
             if not memory.get_recent(limit=1):
                 return "No historical repair cases found yet."
             retrieval = memory.retrieve(symptom_tags, expression, topk=5)
-            top = [*retrieval.get("positive", []), *retrieval.get("negative", [])]
-
             lines = []
-            for i, r in enumerate(top, 1):
+            selected = [
+                *list(retrieval.get("positive", []))[:_REPAIR_MEMORY_SUCCESS_LIMIT],
+                *list(retrieval.get("negative", []))[:_REPAIR_MEMORY_FAILURE_LIMIT],
+            ]
+            for i, r in enumerate(selected, 1):
                 decision = r.get("accept_decision", "?")
-                expr = (r.get("expression") or "")[:80]
-                tags = ", ".join(v for v in (r.get("symptom_tags") or []) if v)
+                expr = _clip_text(r.get("expression"), 70)
+                tags = ",".join(str(v) for v in (r.get("symptom_tags") or [])[:3] if v)
                 semantic = r.get("semantic_score", 0.0)
                 if decision == "accepted":
-                    dirs = ", ".join(v for v in (r.get("recommended_directions") or []) if v)
-                    lines.append(f"{i}. [SUCCESS] {expr} | {tags} | semantic={semantic} | fix: {dirs}")
+                    dirs = _clip_text(", ".join(v for v in (r.get("recommended_directions") or []) if v), 72)
+                    lines.append(f"{i}. [SUCCESS] {expr} | tags={tags or '?'} | fix={dirs or '?'} | sem={semantic:.3f}")
                 else:
-                    dirs = ", ".join(v for v in (r.get("forbidden_directions") or []) if v)
-                    lines.append(f"{i}. [FAILED]  {expr} | {tags} | semantic={semantic} | avoid: {dirs}")
+                    dirs = _clip_text(", ".join(v for v in (r.get("forbidden_directions") or []) if v), 72)
+                    lines.append(f"{i}. [FAILED] {expr} | tags={tags or '?'} | avoid={dirs or '?'} | sem={semantic:.3f}")
             return "\n".join(lines) if lines else "No relevant past repairs found."
         except Exception as exc:
             return f"Retrieval error: {exc}"
@@ -238,8 +304,13 @@ def build_tools(memory: RepairMemory, embeddings: Any, validator: Any) -> list:
                 economic_profile=economic_profile,
             )
             lines: list[str] = []
-            for label, records in (("SUCCESS", retrieval.get("positive", [])), ("FAILED", retrieval.get("negative", []))):
-                for i, record in enumerate(records[:k_limit], 1):
+            grouped = (
+                ("SUCCESS", list(retrieval.get("positive", []))[: min(k_limit, _LOGIC_PATTERN_SUCCESS_LIMIT)]),
+                ("FAILED", list(retrieval.get("negative", []))[: min(k_limit, _LOGIC_PATTERN_FAILURE_LIMIT)]),
+            )
+            line_index = 1
+            for label, records in grouped:
+                for record in records:
                     delta = record.get("repair_delta") if isinstance(record.get("repair_delta"), dict) else {}
                     actions = delta.get("actions") or [
                         key for key, enabled in delta.items() if isinstance(enabled, bool) and enabled
@@ -249,12 +320,13 @@ def build_tools(memory: RepairMemory, embeddings: Any, validator: Any) -> list:
                     platform = ""
                     if isinstance(record.get("platform_outcome"), dict):
                         platform = str(record.get("platform_outcome", {}).get("outcome") or record.get("platform_outcome", {}).get("status") or "")
-                    expr = (record.get("expression") or "")[:80]
+                    expr = _clip_text(record.get("expression"), 68)
                     lines.append(
-                        f"{i}. [{label}] {expr} | theme={theme or '?'} | "
-                        f"actions={','.join(str(a) for a in actions) or '?'} | "
+                        f"{line_index}. [{label}] {expr} | theme={_clip_text(theme or '?', 20)} | "
+                        f"actions={_clip_text(','.join(str(a) for a in actions) or '?', 44)} | "
                         f"platform={platform or '?'} | score={score}"
                     )
+                    line_index += 1
             return "\n".join(lines) if lines else "No structured logic patterns found."
         except Exception as exc:
             return f"Structured retrieval error: {exc}"
@@ -320,10 +392,10 @@ def build_tools(memory: RepairMemory, embeddings: Any, validator: Any) -> list:
             f"Strategy: {strategy}\n"
             f"Preserve: {', '.join(do_not_change) or 'nothing specific'}\n"
             f"Blocked operators for this account: {', '.join(blocked_operators) if blocked_operators else 'none'}\n"
-            f"Math profile: {json.dumps(logic.get('math_profile', {}), ensure_ascii=False)}\n"
-            f"Economic profile: {json.dumps(logic.get('economic_profile', {}), ensure_ascii=False)}\n"
-            f"Structured logic patterns:\n{logic_patterns or 'No structured logic patterns provided.'}\n"
-            f"Memory context:\n{memory_context}\n\n"
+            f"Math focus: {_summarize_math_profile(logic.get('math_profile', {}))}\n"
+            f"Economic thesis: {_summarize_economic_profile(logic.get('economic_profile', {}))}\n"
+            f"Pattern cues:\n{_compact_prompt_lines(logic_patterns)}\n"
+            f"Memory cues:\n{_compact_prompt_lines(memory_context)}\n\n"
             f"Generate EXACTLY 1 repair — your single most confident fix — as a JSON array with one item:\n"
             '[\n  {"expression": "...", "hypothesis": "...", "fix_applied": "...", '
             '"math_logic": "...", "economic_logic": "...", "expected_failure_reduction": "..."}\n]'
@@ -368,6 +440,9 @@ class RepairChain:
         self._openai_key = openai_api_key
         self._temperature = temperature
         self._embeddings = None
+        self.last_retrieval_mode = "unused"
+        self.last_retrieval_error: str | None = None
+        self.last_embedding_status = "uninitialized" if openai_api_key else "missing_openai_key"
         self.last_usage: dict[str, float | int] = {"input_tokens": 0, "output_tokens": 0, "latency_ms": 0.0, "calls": 0}
 
     @property
@@ -381,9 +456,25 @@ class RepairChain:
         project = os.environ.get("LANGCHAIN_PROJECT", "(not set)")
         print(f"[repair_agent] initializing model={self._model_id} langsmith_tracing={tracing} project={project}", flush=True)
 
-        if self._embeddings is None and self._openai_key:
-            from langchain_openai import OpenAIEmbeddings
-            self._embeddings = OpenAIEmbeddings(api_key=self._openai_key, model="text-embedding-3-small")
+        require_semantic_memory = os.environ.get("REPAIR_REQUIRE_SEMANTIC_MEMORY", "true").lower() != "false"
+        if self._embeddings is None:
+            if self._openai_key:
+                try:
+                    from langchain_openai import OpenAIEmbeddings
+                    self._embeddings = OpenAIEmbeddings(api_key=self._openai_key, model="text-embedding-3-small")
+                    self.last_embedding_status = "ready"
+                except Exception as exc:
+                    self.last_embedding_status = f"init_failed:{type(exc).__name__}"
+                    self.last_retrieval_mode = "disabled_embedder_init_failed"
+                    self.last_retrieval_error = str(exc)
+                    if require_semantic_memory:
+                        raise RuntimeError(f"semantic repair memory unavailable: {exc}") from exc
+            else:
+                self.last_embedding_status = "missing_openai_key"
+                self.last_retrieval_mode = "disabled_no_embedder"
+                self.last_retrieval_error = "missing_openai_key"
+                if require_semantic_memory:
+                    raise RuntimeError("semantic repair memory unavailable: missing_openai_key")
 
         tools = build_tools(self.memory, self._embeddings, validator)
         tool_map = {t.name: t for t in tools}
@@ -519,6 +610,8 @@ class RepairChain:
             import os
 
             self.last_usage = {"input_tokens": 0, "output_tokens": 0, "latency_ms": 0.0, "calls": 0}
+            self.last_retrieval_mode = "tool_loop_no_retrieval"
+            self.last_retrieval_error = None
             llm_with_tools, tools, tool_map = self._ensure_llm(validator)
             max_iterations = max(8, int(os.environ.get("REPAIR_AGENT_MAX_ITERATIONS", "8")))
             loop_result = self._run_tool_loop(llm_with_tools, tool_map, user_input, max_iterations=max_iterations)
@@ -528,6 +621,8 @@ class RepairChain:
                 output = str(loop_result or "")
                 usage = {"input_tokens": 0, "output_tokens": 0, "latency_ms": 0.0, "calls": 0}
             self.last_usage = usage
+            self.last_retrieval_mode = getattr(self.memory, "last_retrieval_mode", self.last_retrieval_mode)
+            self.last_retrieval_error = getattr(self.memory, "last_retrieval_error", self.last_retrieval_error)
             output_text = _coerce_agent_output_text(output)
             candidates, diagnosis = _parse_agent_output(output_text, category)
             if candidates:
@@ -590,6 +685,9 @@ class RepairChain:
         })
         # Reset embeddings so FAISS index rebuilds on next call
         self._embeddings = None
+
+    def semantic_memory_enabled(self) -> bool:
+        return bool(self._openai_key)
 
 
 # ---------------------------------------------------------------------------

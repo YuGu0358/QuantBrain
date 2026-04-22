@@ -91,6 +91,10 @@ class HypothesisAgent:
         self.generation_quality_min_score = float(os.environ.get("GENERATION_QUALITY_MIN_SCORE", "0.45"))
         self.last_generation_quality: dict[str, Any] = {}
         self.last_repair_quality: dict[str, Any] = {}
+        self.last_generation_retrieval_mode = "unused"
+        self.last_generation_retrieval_error: str | None = None
+        self.last_repair_retrieval_mode = "unused"
+        self.last_repair_retrieval_error: str | None = None
 
     def sample_underweight_category(self, existing_counts: dict[str, int] | None = None) -> str:
         counts = existing_counts or {}
@@ -118,9 +122,22 @@ class HypothesisAgent:
                 repair_context,
                 diagnosis=diagnosis,
                 has_chain=self.repair_chain is not None,
+                semantic_memory_enabled=self._semantic_repair_memory_enabled(),
                 rule_candidate_count=len(rule_candidates),
             )
+            if repair_route.route == "blocked":
+                self.last_repair_retrieval_mode = "blocked_semantic_memory_required"
+                self.last_repair_retrieval_error = ",".join(repair_route.reasons)
+                self.last_repair_quality = summarize_repair_quality(
+                    [],
+                    route="blocked",
+                    seed_candidate_count=len(rule_candidates),
+                )
+                self.last_repair_quality["reasons"] = repair_route.reasons
+                return []
             if repair_route.route == "rule_only" and rule_candidates:
+                self.last_repair_retrieval_mode = "rule_only_no_semantic_memory"
+                self.last_repair_retrieval_error = None
                 return self._select_repair_candidates(
                     repair_context.get("expression", ""),
                     rule_candidates,
@@ -155,6 +172,8 @@ class HypothesisAgent:
                 )
                 if candidates_raw:
                     print(f"[repair_chain] generated {len(candidates_raw)} candidates via LangChain", flush=True)
+                    self.last_repair_retrieval_mode = getattr(self.repair_chain, "last_retrieval_mode", "tool_loop_no_retrieval")
+                    self.last_repair_retrieval_error = getattr(self.repair_chain, "last_retrieval_error", None)
                     selected = self._select_repair_candidates(
                         parent_expr,
                         [_candidate_from_payload(c) for c in candidates_raw],
@@ -166,12 +185,33 @@ class HypothesisAgent:
                     )
                     if selected:
                         return selected
+                if repair_route.require_semantic_memory:
+                    self.last_repair_retrieval_mode = getattr(self.repair_chain, "last_retrieval_mode", "tool_loop_no_retrieval")
+                    self.last_repair_retrieval_error = getattr(self.repair_chain, "last_retrieval_error", None)
+                    self.last_repair_quality = summarize_repair_quality(
+                        [],
+                        route="blocked",
+                        seed_candidate_count=len(rule_candidates),
+                    )
+                    self.last_repair_quality["reasons"] = [*repair_route.reasons, "no_semantic_repair_candidate_selected"]
+                    return []
             except Exception as exc:
                 import traceback
                 print(f"[repair_chain] ERROR: {type(exc).__name__}: {exc}", flush=True)
                 traceback.print_exc()
                 print(f"[repair_chain] falling back to legacy generation path", flush=True)
+                self.last_repair_retrieval_mode = getattr(self.repair_chain, "last_retrieval_mode", "repair_chain_error")
+                self.last_repair_retrieval_error = str(exc)
+                if repair_route.require_semantic_memory:
+                    self.last_repair_quality = summarize_repair_quality(
+                        [],
+                        route="blocked",
+                        seed_candidate_count=len(rule_candidates),
+                    )
+                    self.last_repair_quality["reasons"] = [*repair_route.reasons, "repair_chain_error"]
+                    return []
             if rule_candidates:
+                self.last_repair_retrieval_mode = "rule_fallback_after_chain_error"
                 return self._select_repair_candidates(
                     repair_context.get("expression", ""),
                     rule_candidates,
@@ -183,6 +223,9 @@ class HypothesisAgent:
                 )
 
         request_payload = self._request_payload(objective, category, n, repair_context=repair_context, diagnosis=diagnosis)
+        if not is_repair_mode:
+            self.last_generation_retrieval_mode = getattr(self.kb, "last_rag_mode", "unknown")
+            self.last_generation_retrieval_error = getattr(self.kb, "last_rag_error", None)
         cached = self.cache.get(request_payload)
         if cached.hit and cached.payload:
             response = cached.payload["response"]
@@ -230,6 +273,14 @@ class HypothesisAgent:
             self.cache.put(request_payload, response)
 
         return [_candidate_from_payload(item) for item in response.get("candidates", [])][:n]
+
+    def _semantic_repair_memory_enabled(self) -> bool:
+        if self.repair_chain is not None and hasattr(self.repair_chain, "semantic_memory_enabled"):
+            try:
+                return bool(self.repair_chain.semantic_memory_enabled())
+            except Exception:
+                return False
+        return False
 
     def _get_operators(self) -> list[str]:
         blocked = load_blocked_operators()

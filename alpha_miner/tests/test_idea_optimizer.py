@@ -62,6 +62,10 @@ def test_optimize_fallback_on_llm_error():
 
     assert result["objective"] == "any idea"
     assert "category" in result
+    mock_router.record_result.assert_called_once()
+    call = mock_router.record_result.call_args[0]
+    assert call[1] == "idea"
+    assert call[2] is False
 
 
 def test_optimize_with_kb_context(tmp_path):
